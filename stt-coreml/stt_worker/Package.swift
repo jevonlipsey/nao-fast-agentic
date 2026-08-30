@@ -7,7 +7,7 @@ let package = Package(
         .macOS(.v14)
     ],
     dependencies: [
-        .package(path: "../FluidAudio")
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", branch: "main")
     ],
     targets: [
         .executableTarget(
