@@ -1,5 +1,7 @@
 # nao-fast-agentic
 
+<img width="1387" height="540" alt="image" src="https://github.com/user-attachments/assets/4e132237-d2a4-41b4-860e-69ffae639b95" />
+
 This project extends the [Nao-ChatGPT](https://github.com/MIRRORLab-Summer-Interns-2024/Nao-ChatGPT) repository built by the MIRRORLab Summer 2024 interns. That project connected the Aldebaran Nao robot to ChatGPT so it could listen to speech, generate a response, and speak it back with gestures. This project builds on that foundation with two goals:
 
 1. **Improve the robot's capabilities.** The robot now features native multimodal vision and external tool calling. It can actively see you during a conversation using its built-in camera, read and summarize local documents (PDFs, PNGs, TXT), and browse the web using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). While tools are running, the robot speaks a filler phrase like "Let me look that up" so the conversation doesn't stall. It also supports local LLMs via [Ollama](https://ollama.com/) as an alternative to the OpenAI API.
