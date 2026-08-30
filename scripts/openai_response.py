@@ -15,7 +15,7 @@ import sys
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
 from openai import AsyncOpenAI
-import mcp # keep for type hints if needed, but not strictly needed
+import mcp  # keep for type hints if needed, but not strictly needed
 
 # allow importing from lib
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -47,7 +47,7 @@ RESPONSE_FILE = os.path.join(STATE_DIR, "response.txt")
 LISTEN_FILE = os.path.join(STATE_DIR, "listen.txt")
 HISTORY_FILE = os.path.join(STATE_DIR, "history.txt")
 
-SYSTEM_PROMPT = """You are NAO, a 58cm humanoid robot built by Aldebaran, standing on a table
+SYSTEM_PROMPT = f"""You are NAO, a 58cm humanoid robot built by Aldebaran, standing on a table
 in an HRI research laboratory in Colorado, USA (Mountain Time). You communicate exclusively through spoken
 language via ALAnimatedSpeech — your text output is sent directly to a
 text-to-speech engine on your body. You are having a live, face-to-face
@@ -66,7 +66,10 @@ You have access to the following tool servers:
   - For weather, fetch `https://wttr.in/Colorado?format=3`
   - For ANY general questions, facts, or web searches, fetch `https://lite.duckduckgo.com/lite/?q=YOUR_QUERY` (Use this for all internet searches!)
 - **Time:** Get the current date, time, and timezone.
-- **Context Folder:** You have access to a local directory called "context". If the user asks you to read or look at a poster, image, or document "in context", use your filesystem tools (like `list_directory`, `read_media_file`, or `read_file`) to find and read it.
+- **Context Folder & Files:** You have access to a local directory located exactly at `{os.path.join(BASE_DIR, "context")}`. 
+  - **CRITICAL:** If the user mentions *any* file, photo, image, poster, PDF, or document, you MUST implicitly assume it is located in this context folder. Do not ask them where it is.
+  - First, use `list_directory` on that exact absolute path to find the correct filename.
+  - Then, ALWAYS use the `read_document` tool to read it. Do not use `read_file` or `read_media_file`, as they will fail. `read_document` natively parses PDFs and formats images for your vision system.
 - **Memory:** You have a persistent knowledge graph. Use your memory tools to store and retrieve important facts about the user so you remember them across sessions.
 
 If the user asks a factual question, a time question, or anything you aren't certain about — use your tools. Never say you can't access the internet or don't know the time. You have full access.
@@ -213,46 +216,98 @@ async def process_chat_turn(text, tools_list, tool_router):
                 except Exception:
                     arguments = {}
 
+                msgs = []
+                texts = []
+                images = []
+
                 if name in tool_router:
                     session = tool_router[name]
                     tool_result = await session.call_tool(name, arguments=arguments)
-                    
-                    parsed_content = []
+
                     if tool_result.content:
                         for item in tool_result.content:
-                            if getattr(item, "type", "") == "text" and hasattr(item, "text"):
+                            if getattr(item, "type", "") == "text" and hasattr(
+                                item, "text"
+                            ):
                                 text_val = item.text
-                                if len(text_val) > 1500:
-                                    text_val = text_val[:1500] + "\n... [CONTENT TRUNCATED FOR BREVITY]"
-                                parsed_content.append({"type": "text", "text": text_val})
-                            elif getattr(item, "type", "") == "image" and hasattr(item, "data") and hasattr(item, "mimeType"):
+                                # sometimes tools lazily return base64 as plain text
+                                if text_val.startswith("data:image"):
+                                    images.append(
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {"url": text_val},
+                                        }
+                                    )
+                                else:
+                                    if len(text_val) > 1500:
+                                        text_val = (
+                                            text_val[:1500]
+                                            + "\n... [CONTENT TRUNCATED FOR BREVITY]"
+                                        )
+                                    texts.append(text_val)
+                            elif getattr(item, "type", "") == "image" and hasattr(
+                                item, "data"
+                            ):
+                                mime_val = getattr(
+                                    item,
+                                    "mime_type",
+                                    getattr(item, "mimeType", "image/jpeg"),
+                                )
                                 b64_data = item.data
                                 if isinstance(b64_data, bytes):
                                     import base64
-                                    b64_data = base64.b64encode(b64_data).decode('utf-8')
-                                parsed_content.append({
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{item.mimeType};base64,{b64_data}"}
-                                })
+
+                                    b64_data = base64.b64encode(b64_data).decode(
+                                        "utf-8"
+                                    )
+                                images.append(
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{mime_val};base64,{b64_data}",
+                                            "detail": "high",
+                                        },
+                                    }
+                                )
                             else:
-                                # fallback for embedded resources or unknown types
-                                parsed_content.append({"type": "text", "text": f"[Non-text resource omitted]"})
-                    else:
-                        parsed_content = "Tool executed successfully with no output."
+                                texts.append("[Non-text resource omitted]")
                 else:
-                    parsed_content = f"Error: Tool {name} not found."
+                    texts.append(f"Error: Tool {name} not found.")
 
-                return {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": name,
-                    "content": parsed_content,
-                }
+                tool_str = "\n".join(texts) if texts else ""
+                if images and not tool_str:
+                    tool_str = "Media file processed successfully. The image data has been injected into your vision system in the following message."
+                elif not tool_str and not images:
+                    tool_str = "Tool executed successfully with no output."
 
-            tool_messages = await asyncio.gather(
+                # tool response message
+                msgs.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": name,
+                        "content": tool_str,
+                    }
+                )
+
+                # if images, append a user message containing the vision data
+                if images:
+                    user_content = [
+                        {
+                            "type": "text",
+                            "text": f"[System Image Injection] The tool '{name}' successfully retrieved the image. Here is the visual data for you to read:",
+                        }
+                    ]
+                    user_content.extend(images)
+                    msgs.append({"role": "user", "content": user_content})
+
+                return msgs
+
+            tool_messages_lists = await asyncio.gather(
                 *(execute_tool(tc) for tc in message.tool_calls)
             )
-            messages.extend(tool_messages)
+            for msgs in tool_messages_lists:
+                messages.extend(msgs)
 
             total_tools_time += time.time() - t_tools_start
 
@@ -305,8 +360,10 @@ async def main():
         try:
             print("[[ SYSTEM: Connecting to MCP servers... ]]")
             mcp_config_path = os.path.join(BASE_DIR, "mcp_config.json")
-            tools_list, tool_router = await load_and_register_mcp_servers(stack, mcp_config_path)
-            
+            tools_list, tool_router = await load_and_register_mcp_servers(
+                stack, mcp_config_path
+            )
+
             print("[[ SYSTEM: MCP tools ready. ]]")
             safe_write(LISTEN_FILE, "yes")
         except Exception as e:

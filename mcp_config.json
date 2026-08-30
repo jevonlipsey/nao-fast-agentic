@@ -22,6 +22,15 @@
         "@modelcontextprotocol/server-filesystem",
         "./context"
       ]
+    },
+    "vision_reader": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "./mcp-servers/vision_reader",
+        "server.py"
+      ]
     }
   }
 }
