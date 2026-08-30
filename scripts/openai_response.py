@@ -65,6 +65,7 @@ You have access to the following tool servers:
 - **Fetch:** Fetch any URL and read it as markdown. You can use this for instant factual lookups:
   - For weather, fetch `https://wttr.in/Colorado?format=3`
   - For ANY general questions, facts, or web searches, fetch `https://lite.duckduckgo.com/lite/?q=YOUR_QUERY` (Use this for all internet searches!)
+- **Camera Vision:** You have a `take_picture` tool. If the user asks what they are wearing, what you see, or points to something, use this tool to look through your top camera.
 - **Time:** Get the current date, time, and timezone.
 - **Context Folder & Files:** You have access to a local directory located exactly at `{os.path.join(BASE_DIR, "context")}`. 
   - **CRITICAL:** If the user mentions *any* file, photo, image, poster, PDF, or document, you MUST implicitly assume it is located in this context folder. Do not ask them where it is.
@@ -179,11 +180,22 @@ async def process_chat_turn(text, tools_list, tool_router):
     start_time = time.time()
 
     try:
+        CAMERA_TOOL = {
+            "type": "function",
+            "function": {
+                "name": "take_picture",
+                "description": "Take a photo through your eyes to see the user, the room, or objects. Use this ONLY if asked a visual question about your surroundings or the human you are talking to."
+            }
+        }
+        
+        # Inject it into the tools list we give to OpenAI
+        active_tools = tools_list + [CAMERA_TOOL] if tools_list else [CAMERA_TOOL]
+
         completion_args = {"model": MODEL, "messages": messages, "timeout": 60.0}
         if USE_LOCAL_LLM:
             completion_args["extra_body"] = {"options": {"num_ctx": 4096}}
-        if tools_list:
-            completion_args["tools"] = tools_list
+        if active_tools:
+            completion_args["tools"] = active_tools
 
         response = await client.chat.completions.create(**completion_args)
         t_llm1 = time.time() - start_time
@@ -206,6 +218,29 @@ async def process_chat_turn(text, tools_list, tool_router):
 
             async def execute_tool(tool_call):
                 name = tool_call.function.name
+                
+                if name == "take_picture":
+                    print("[[ SYSTEM: Executing Tool -> take_picture (Native) ]]")
+                    frame_path = os.path.join(STATE_DIR, "latest_frame.jpg")
+                    
+                    if os.path.exists(frame_path):
+                        with open(frame_path, "rb") as f:
+                            import base64
+                            b64_data = base64.b64encode(f.read()).decode("utf-8")
+                        
+                        return [
+                            {"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": "Camera frame captured successfully."},
+                            {
+                                "role": "user", 
+                                "content": [
+                                    {"type": "text", "text": "[System Image Injection] Here is the live view from your camera:"},
+                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}", "detail": "low"}}
+                                ]
+                            }
+                        ]
+                    else:
+                        return [{"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": "Error: Camera feed is offline."}]
+
                 print(f"[[ SYSTEM: Executing Tool -> {name} ]]")
                 try:
                     args_data = tool_call.function.arguments

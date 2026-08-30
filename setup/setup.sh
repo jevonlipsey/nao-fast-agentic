@@ -12,10 +12,10 @@ if [ "$OS_TYPE" = "Darwin" ]; then
     echo "[[ macOS Detected: Installing Rosetta and osx-64 Conda env ]]"
     # Suppress error if Rosetta is already installed
     softwareupdate --install-rosetta --agree-to-license 2>/dev/null || true
-    CONDA_SUBDIR=osx-64 conda create --name nao -c conda-forge python=2.7 -y
+    CONDA_SUBDIR=osx-64 conda create --name nao -c conda-forge python=2.7 pillow -y
 elif [ "$OS_TYPE" = "Linux" ]; then
     echo "[[ Linux Detected: Creating standard Conda env ]]"
-    conda create --name nao python=2.7 -y
+    conda create --name nao -c conda-forge python=2.7 pillow -y
 else
     echo "Unsupported OS for this script. Use setup.bat for Windows."
     exit 1

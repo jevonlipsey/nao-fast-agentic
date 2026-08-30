@@ -2,21 +2,22 @@
 
 This project extends the [Nao-ChatGPT](https://github.com/MIRRORLab-Summer-Interns-2024/Nao-ChatGPT) repository built by the MIRRORLab Summer 2024 interns. That project connected the Aldebaran Nao robot to ChatGPT so it could listen to speech, generate a response, and speak it back with gestures. This project builds on that foundation with two goals:
 
-1. **Improve the robot's capabilities.** The robot can now call external tools (browse the web, check the time, read files) using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). While tools are running, the robot speaks a filler phrase like "Let me look that up" so the conversation doesn't stall. It also supports local LLMs via [Ollama](https://ollama.com/) as an alternative to the OpenAI API.
+1. **Improve the robot's capabilities.** The robot now features native multimodal vision and external tool calling. It can actively see you during a conversation using its built-in camera, read and summarize local documents (PDFs, PNGs, TXT), and browse the web using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). While tools are running, the robot speaks a filler phrase like "Let me look that up" so the conversation doesn't stall. It also supports local LLMs via [Ollama](https://ollama.com/) as an alternative to the OpenAI API.
 
-2. **Simplify the setup process.** The original project required a Windows VM to run the Nao SDK. This project eliminates that requirement entirely. Automated setup scripts (`setup.sh` / `setup.bat`) handle the SDK installation across Mac, Linux, and Windows. A single `python main.py` command boots the entire pipeline, including the legacy Python 2.7 robot layer.
+2. **Simplify the setup process.** The original project required a Windows VM and complicated pathing to run the Nao SDK (on Mac). This project eliminates that requirement. Automated setup scripts (`setup.sh` / `setup.bat`) handle the SDK installation across Mac, Linux, and Windows. A single `python main.py` command boots the entire pipeline, including the legacy Python 2.7 robot layer.
 
 ---
 
 ## How It Works
 
-The pipeline runs three processes in parallel, coordinated through text files in the `state/` directory:
+The pipeline runs four processes in parallel, coordinated through text/jpg files in the `state/` directory:
 
 | Process                      | Role                                                                   | Environment                       |
 | ---------------------------- | ---------------------------------------------------------------------- | --------------------------------- |
 | `whisper_stt.py`             | Listens to the microphone and writes transcriptions                    | Python 3.10+                      |
 | `openai_response.py`         | Sends transcriptions to the LLM, executes tool calls, writes responses | Python 3.10+                      |
 | `nao_tts.py` / `mock_nao.py` | Reads responses and makes the robot speak and gesture                  | Python 2.7 (Conda) / Python 3.10+ |
+| `nao_vision.py`              | Polls the robot's top camera at 1 FPS and saves the frame              | Python 2.7 (Conda)                |
 
 On macOS, speech-to-text uses a compiled Swift CoreML worker for fast local transcription. On Windows and Linux, it falls back to Python Whisper.
 
@@ -170,6 +171,14 @@ python scripts/test_connection.py
 ### Microphone Selection
 
 To change which microphone the system listens on, open `scripts/whisper_stt.py` and update the `MICROPHONE_INDEX` variable. There is a commented-out code block in the `main()` function that lists all available audio devices and their indexes when uncommented.
+
+### Adding Native Tools
+
+The robot's tool capabilities are defined primarily via MCP servers, but some tightly coupled hardware features (like the `take_picture` tool) are implemented natively inside `scripts/openai_response.py`.
+
+The `take_picture` tool interacts with `scripts/nao_vision.py` (which runs in Python 2.7 and grabs a frame every second, saving it to `state/latest_frame.jpg`). The LLM reads this file when using the tool, creating an ultra-fast, low-latency live vision pipeline without the overhead of an MCP server. (Note: When running in Mock mode, `scripts/mock_vision.py` captures frames from your computer's webcam instead, allowing you to test the full vision pipeline without the robot).d
+
+Additionally, `mcp-servers/` has one custom local MCP called `vision-reader`. This tool allows PDFs and images to get piped cleanly through OpenAi's API endpoint.
 
 ### Adding MCP Tools
 

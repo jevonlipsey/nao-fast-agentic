@@ -2,7 +2,7 @@
 echo [[ Starting Windows Naoqi Environment Setup ]]
 
 :: 1. Create and activate the conda env
-call conda create --name nao python=2.7 -y
+call conda create --name nao -c conda-forge python=2.7 pillow -y
 call conda activate nao
 
 :: 2. Create directory for SDK

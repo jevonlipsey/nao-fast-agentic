@@ -5,6 +5,7 @@
 
 # Runtime State / IPC
 state/*.txt
+state/*.jpg
 memory.jsonl
 
 # Swift Compilation Cache

@@ -25,18 +25,35 @@ def main():
         # Launch the Actuation layer (Mock or Real Nao)
         if USE_MOCK_NAO:
             nao_mode = 'mock'
+            
+            # Launch TTS Mock
             script_path = os.path.join(script_dir, "scripts", 'mock_nao.py')
-            p = subprocess.Popen([sys.executable, script_path], cwd=script_dir)
-            processes.append(p)
+            p_tts = subprocess.Popen([sys.executable, script_path], cwd=script_dir)
+            processes.append(p_tts)
+
+            # Launch Vision Mock
+            vision_path = os.path.join(script_dir, "scripts", 'mock_vision.py')
+            p_vis = subprocess.Popen([sys.executable, vision_path], cwd=script_dir)
+            processes.append(p_vis)
         else:
             nao_mode = 'physical'
+            
+            # Launch TTS
             script_path = os.path.join(script_dir, "scripts", 'nao_tts.py')
             # Use conda run to execute the script in the isolated Python 2.7 environment
-            p = subprocess.Popen(
+            p_tts = subprocess.Popen(
                 ["conda", "run", "--no-capture-output", "-n", "nao", "python", script_path],
                 cwd=script_dir
             )
-            processes.append(p)
+            processes.append(p_tts)
+
+            # Launch Vision
+            vision_path = os.path.join(script_dir, "scripts", 'nao_vision.py')
+            p_vis = subprocess.Popen(
+                ["conda", "run", "--no-capture-output", "-n", "nao", "python", vision_path],
+                cwd=script_dir
+            )
+            processes.append(p_vis)
 
         print(f'[[PIPELINE]]: running  |  nao={nao_mode}\n')
 
