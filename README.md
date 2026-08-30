@@ -1,7 +1,6 @@
 # nao-fast-agentic
 
-<img width="2116" height="3632" alt="image" src="https://github.com/user-attachments/assets/d692372e-4811-4855-8f63-fa8ce197b6e4" />
-
+<img width="2116" height="3768" alt="image" src="https://github.com/user-attachments/assets/ecb53a00-c897-4baa-933d-22e9613b696b" />
 
 This project extends the [Nao-ChatGPT](https://github.com/MIRRORLab-Summer-Interns-2024/Nao-ChatGPT) repository built by the MIRRORLab Summer 2024 interns. That project connected the Aldebaran Nao robot to ChatGPT so it could listen to speech, generate a response, and speak it back with gestures. This project builds on that foundation with two goals:
 
