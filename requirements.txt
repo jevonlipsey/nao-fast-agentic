@@ -1,0 +1,9 @@
+openai>=1.0.0
+SpeechRecognition>=3.10.0
+mcp>=1.0.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# Non-Mac STT Fallback (Windows/Linux)
+openai-whisper>=20231117
+PyAudio>=0.2.14
