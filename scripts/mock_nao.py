@@ -23,6 +23,10 @@ while True:
         text = safe_read(RESPONSE_FILE)
 
         if text:
+            # clear response file immediately so the LLM can write the final response 
+            # while the robot is still "speaking" this one
+            safe_write(RESPONSE_FILE, "")
+
             is_intermediate = text.startswith("[INTERMEDIATE] ")
 
             if is_intermediate:
@@ -31,9 +35,6 @@ while True:
                 time.sleep(1.0)
             else:
                 time.sleep(2.0)
-
-            # clear response file
-            safe_write(RESPONSE_FILE, "")
 
             # signal ready to listen after final response
             if not is_intermediate:

@@ -66,6 +66,8 @@ You have access to the following tool servers:
   - For weather, fetch `https://wttr.in/Colorado?format=3`
   - For ANY general questions, facts, or web searches, fetch `https://lite.duckduckgo.com/lite/?q=YOUR_QUERY` (Use this for all internet searches!)
 - **Time:** Get the current date, time, and timezone.
+- **Context Folder:** You have access to a local directory called "context". If the user asks you to read or look at a poster, image, or document "in context", use your filesystem tools (like `list_directory`, `read_media_file`, or `read_file`) to find and read it.
+- **Memory:** You have a persistent knowledge graph. Use your memory tools to store and retrieve important facts about the user so you remember them across sessions.
 
 If the user asks a factual question, a time question, or anything you aren't certain about — use your tools. Never say you can't access the internet or don't know the time. You have full access.
 
@@ -115,6 +117,13 @@ FILLER_PHRASES = [
     "^start(animations/Stand/BodyTalk/BodyTalk_3) One second, checking on that.",
     "^start(animations/Stand/Gestures/YouKnowWhat_1) Hang on, let me pull that up.",
     "^start(animations/Stand/Gestures/Explain_3) Give me just a moment on that one.",
+    "^start(animations/Stand/Gestures/Thinking_1) Hmm, let me find out.",
+    "^start(animations/Stand/Gestures/Explain_2) Let's see what I can find.",
+    "^start(animations/Stand/BodyTalk/BodyTalk_1) I'll need to check my sources for that.",
+    "^start(animations/Stand/Gestures/YouKnowWhat_3) Hold that thought, I'm checking.",
+    "^start(animations/Stand/Gestures/Explain_4) One moment please.",
+    "^start(animations/Stand/Gestures/Thinking_3) Let me run a quick search on that.",
+    "^start(animations/Stand/Gestures/Explain_6) Let me double check that for you.",
 ]
 
 
@@ -207,21 +216,37 @@ async def process_chat_turn(text, tools_list, tool_router):
                 if name in tool_router:
                     session = tool_router[name]
                     tool_result = await session.call_tool(name, arguments=arguments)
-                    result_text = (
-                        tool_result.content[0].text if tool_result.content else ""
-                    )
-                    if len(result_text) > 1500:
-                        result_text = (
-                            result_text[:1500] + "\n... [CONTENT TRUNCATED FOR BREVITY]"
-                        )
+                    
+                    parsed_content = []
+                    if tool_result.content:
+                        for item in tool_result.content:
+                            if getattr(item, "type", "") == "text" and hasattr(item, "text"):
+                                text_val = item.text
+                                if len(text_val) > 1500:
+                                    text_val = text_val[:1500] + "\n... [CONTENT TRUNCATED FOR BREVITY]"
+                                parsed_content.append({"type": "text", "text": text_val})
+                            elif getattr(item, "type", "") == "image" and hasattr(item, "data") and hasattr(item, "mimeType"):
+                                b64_data = item.data
+                                if isinstance(b64_data, bytes):
+                                    import base64
+                                    b64_data = base64.b64encode(b64_data).decode('utf-8')
+                                parsed_content.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{item.mimeType};base64,{b64_data}"}
+                                })
+                            else:
+                                # fallback for embedded resources or unknown types
+                                parsed_content.append({"type": "text", "text": f"[Non-text resource omitted]"})
+                    else:
+                        parsed_content = "Tool executed successfully with no output."
                 else:
-                    result_text = f"Error: Tool {name} not found."
+                    parsed_content = f"Error: Tool {name} not found."
 
                 return {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "name": name,
-                    "content": result_text,
+                    "content": parsed_content,
                 }
 
             tool_messages = await asyncio.gather(

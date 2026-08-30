@@ -30,10 +30,12 @@ TRANSCRIPTION_FILE = os.path.join(STATE_DIR, "transcription.txt")
 MICROPHONE_INDEX = 3
 
 
-def _filter_stderr(proc):
+def _filter_stderr(proc, ready_event):
     for line in proc.stderr:
         if "[[STT_WORKER]]" in line:
             print(line, end="", flush=True)
+            if "[[STT_WORKER]]: ready" in line:
+                ready_event.set()
 
 
 ## main loop
@@ -64,8 +66,11 @@ def main():
             text=True,
             bufsize=1,
         )
-        t = threading.Thread(target=_filter_stderr, args=(proc,), daemon=True)
+        ready_event = threading.Event()
+        t = threading.Thread(target=_filter_stderr, args=(proc, ready_event), daemon=True)
         t.start()
+        # block until worker says it's ready
+        ready_event.wait()
         return proc
 
     if IS_MAC:

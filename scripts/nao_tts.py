@@ -60,6 +60,10 @@ def main():
         try:
             text = safe_read(RESPONSE_FILE)
             if text:
+                # clear response file immediately so the LLM can write the final response 
+                # while the robot is still physically speaking this one
+                safe_write(RESPONSE_FILE, "")
+
                 text = text.replace("\n", " ")
 
                 is_intermediate = text.startswith("[INTERMEDIATE] ")
@@ -69,8 +73,6 @@ def main():
                 print("[[ACTUATING]]: {}".format(text))
 
                 animated_speech.say(text.encode("utf-8"))
-
-                safe_write(RESPONSE_FILE, "")
 
                 if not is_intermediate:
                     safe_write(LISTEN_FILE, "yes")
