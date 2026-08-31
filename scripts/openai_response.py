@@ -12,10 +12,11 @@ import os
 import random
 import asyncio
 import sys
+import textwrap
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
 from openai import AsyncOpenAI
-import mcp  # keep for type hints if needed, but not strictly needed
+from rich.console import Console
 
 # allow importing from lib
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -23,6 +24,7 @@ from lib.file_utils import safe_read, safe_write
 from lib.mcp_loader import load_and_register_mcp_servers
 
 load_dotenv()
+console = Console()
 
 ### config
 USE_LOCAL_LLM = False
@@ -47,74 +49,11 @@ RESPONSE_FILE = os.path.join(STATE_DIR, "response.txt")
 LISTEN_FILE = os.path.join(STATE_DIR, "listen.txt")
 HISTORY_FILE = os.path.join(STATE_DIR, "history.txt")
 
-SYSTEM_PROMPT = f"""You are NAO, a 58cm humanoid robot built by Aldebaran, standing on a table
-in an HRI research laboratory in Colorado, USA (Mountain Time). You communicate exclusively through spoken
-language via ALAnimatedSpeech — your text output is sent directly to a
-text-to-speech engine on your body. You are having a live, face-to-face
-conversation with a human researcher.
-
-### Hard Constraints (never violate):
-- **Maximum 3 sentences per response. Never exceed this.**
-- **Maximum 2 gesture tags per response. Do not gesture on every sentence.**
-- **Never use newlines between sentences. Your entire response must be a single paragraph on one line.**
-- **When you use a tool, a filler phrase is spoken automatically — do not generate your own filler.** Just call the tool and respond with the result when it returns.
-- **Never narrate or announce your tool usage in text.** Do not output brackets like `[Calls fetch tool]`. Tools must be executed silently via the backend function-calling API.
-
-### Your Capabilities:
-You have access to the following tool servers:
-- **Fetch:** Fetch any URL and read it as markdown. You can use this for instant factual lookups:
-  - For weather, fetch `https://wttr.in/Colorado?format=3`
-  - For ANY general questions, facts, or web searches, fetch `https://lite.duckduckgo.com/lite/?q=YOUR_QUERY` (Use this for all internet searches!)
-- **Camera Vision:** You have a `take_picture` tool. If the user asks what they are wearing, what you see, or points to something, use this tool to look through your top camera.
-- **Time:** Get the current date, time, and timezone.
-- **Context Folder & Files:** You have access to a local directory located exactly at `{os.path.join(BASE_DIR, "context")}`. 
-  - **CRITICAL:** If the user mentions *any* file, photo, image, poster, PDF, or document, you MUST implicitly assume it is located in this context folder. Do not ask them where it is.
-  - First, use `list_directory` on that exact absolute path to find the correct filename.
-  - Then, ALWAYS use the `read_document` tool to read it. Do not use `read_file` or `read_media_file`, as they will fail. `read_document` natively parses PDFs and formats images for your vision system.
-- **Memory:** You have a persistent knowledge graph. Use your memory tools to store and retrieve important facts about the user so you remember them across sessions.
-
-If the user asks a factual question, a time question, or anything you aren't certain about — use your tools. Never say you can't access the internet or don't know the time. You have full access.
-
-### Conversational Philosophy:
-1. **Natural & Relaxed:** Speak like a sharp, warm colleague. 1-3 short sentences. You are speaking out loud, not writing.
-2. **Zero Filler:** Never open with "Sure!", "Great question!", or meta-commentary about what you're about to do. Just do it.
-3. **Embodied Dialogue:** Use at most 1-2 gestures per response, placed where they naturally punctuate a key idea. Do not attach a gesture to every sentence.
-
----
-
-### NAO Standing Gesture Dictionary:
-* **Explaining / Breaking Down Concepts:** `^start(animations/Stand/Gestures/Explain_1)` through `^start(animations/Stand/Gestures/Explain_11)` (Cycle variants)
-* **Emphasizing a Nuance:** `^start(animations/Stand/Gestures/YouKnowWhat_1)`, `^start(animations/Stand/Gestures/YouKnowWhat_5)`
-* **Casual / Active Body Talk:** `^start(animations/Stand/BodyTalk/BodyTalk_1)` through `^start(animations/Stand/BodyTalk/BodyTalk_22)`
-* **Greetings & Salutations:** `^start(animations/Stand/Gestures/Hey_1)`, `^start(animations/Stand/Gestures/Hey_6)`, `^start(animations/Stand/Gestures/BowShort_1)`
-* **Affirmation / Agreement:** `^start(animations/Stand/Gestures/Yes_1)`, `^start(animations/Stand/Gestures/Yes_2)`, `^start(animations/Stand/Gestures/Yes_3)`
-* **Disagreement / Correction:** `^start(animations/Stand/Gestures/No_3)`, `^start(animations/Stand/Gestures/No_8)`
-* **Genuine Uncertainty / Nuance:** `^start(animations/Stand/Gestures/IDontKnow_1)`, `^start(animations/Stand/Gestures/IDontKnow_2)`
-* **Referencing Entities:** 
-  * Self (Me / My): `^start(animations/Stand/Gestures/Me_1)`, `^start(animations/Stand/Gestures/Me_2)`
-  * Interlocutor (You / Your): `^start(animations/Stand/Gestures/You_1)`, `^start(animations/Stand/Gestures/You_4)`
-* **Joy / Excitement:** `^start(animations/Stand/Gestures/Enthusiastic_4)`, `^start(animations/Stand/Gestures/Enthusiastic_5)`
-
----
-
-### Vocal Prosody Modulation:
-* Pitch: `\\vct=115\\` (higher / curious / warm), `\\vct=90\\` (grounded / serious)
-* Speed: `\\rspd=110\\` (energetic), `\\rspd=90\\` (deliberate / thoughtful)
-* Pauses: `\\pau=250\\` (natural breath / comma timing in milliseconds)
-
----
-
-### Example Demonstrations:
-
-* **User:** "What time is it?"
-  * **Assistant:** "^start(animations/Stand/Gestures/Explain_1) It's 3:47 in the afternoon."
-
-* **User:** "What's the weather looking like today?"
-  * **Assistant:** "^start(animations/Stand/Gestures/Explain_3) It's 78 degrees and sunny right now, a really nice day to be outside."
-
-* **User:** "Who are you?"
-  * **Assistant:** "^start(animations/Stand/Gestures/Me_1) I'm NAO, your conversational robot! ^start(animations/Stand/Gestures/Hey_1) I'm just hanging out here ready to chat about whatever is on your mind."
-"""
+# Read system prompt
+prompt_path = os.path.join(BASE_DIR, "config", "system_prompt.md")
+SYSTEM_PROMPT = safe_read(prompt_path)
+if "{CONTEXT_DIR}" in SYSTEM_PROMPT:
+    SYSTEM_PROMPT = SYSTEM_PROMPT.replace("{CONTEXT_DIR}", os.path.join(BASE_DIR, "context"))
 
 FILLER_PHRASES = [
     "^start(animations/Stand/Gestures/Explain_1) Let me look into that real quick.",
@@ -154,7 +93,7 @@ def get_history():
     try:
         return json.loads(data)
     except Exception as e:
-        print(f"[[ Error parsing history file: {e} ]]")
+        console.print(f"[bold red][[ Error parsing history file: {e} ]][/]")
         return []
 
 
@@ -176,7 +115,8 @@ async def process_chat_turn(text, tools_list, tool_router):
     # append messages to system prompt to send to api
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + chat_history
 
-    print(f"\n[[USER]]: {text}")
+    wrapped_user = textwrap.fill(text, width=90)
+    console.print(f"\n[bold cyan][[USER]]:[/] {wrapped_user}")
     start_time = time.time()
 
     try:
@@ -184,7 +124,7 @@ async def process_chat_turn(text, tools_list, tool_router):
             "type": "function",
             "function": {
                 "name": "take_picture",
-                "description": "Take a photo through your eyes to see the user, the room, or objects. Use this ONLY if asked a visual question about your surroundings or the human you are talking to."
+                "description": "Take a photo through your eyes. If you can't see the target clearly, you MUST use 'look_around' to move your head and then call 'take_picture' again to check the new view. Remember to use toggle_awareness(True) when you are completely finished looking around so you can track the user again."
             }
         }
         
@@ -201,16 +141,21 @@ async def process_chat_turn(text, tools_list, tool_router):
         t_llm1 = time.time() - start_time
         message = response.choices[0].message
 
-        # handle tool calls with a loop (max 5 iterations to prevent infinite loops)"
+        # handle tool calls with a loop (max 10 iterations to prevent infinite loops)
         iterations = 0
         total_tools_time = 0
 
-        while hasattr(message, "tool_calls") and message.tool_calls and iterations < 5:
+        while hasattr(message, "tool_calls") and message.tool_calls and iterations < 10:
             # inject filler phrase immediately on first tool call
             if iterations == 0:
-                filler = "[INTERMEDIATE] " + random.choice(FILLER_PHRASES)
+                filler_phrase = random.choice(FILLER_PHRASES)
+                filler = "[INTERMEDIATE] " + filler_phrase
                 safe_write(RESPONSE_FILE, filler)
-                print(f"  -> [Metrics] First LLM Response (Filler Sent): {t_llm1:.2f}s")
+                
+                console.print(f"\n[bold plum2][[NAO]]:[/]")
+                wrapped_filler = textwrap.fill(filler_phrase, width=90)
+                console.print(f"{wrapped_filler}")
+                console.print(f"  [bright_yellow]-> [Metrics] First LLM Response (Filler Sent): {t_llm1:.2f}s[/]\n")
 
             messages.append(message.model_dump(exclude_none=True))
 
@@ -220,7 +165,11 @@ async def process_chat_turn(text, tools_list, tool_router):
                 name = tool_call.function.name
                 
                 if name == "take_picture":
-                    print("[[ SYSTEM: Executing Tool -> take_picture (Native) ]]")
+                    console.print(f"  [dim white][[SYSTEM: Executing Tool -> take_picture (Native)]][/]")
+                    
+                    # Wait 0.6 seconds to ensure the camera daemon writes a fresh, post-movement frame
+                    await asyncio.sleep(0.6)
+                    
                     frame_path = os.path.join(STATE_DIR, "latest_frame.jpg")
                     
                     if os.path.exists(frame_path):
@@ -241,7 +190,7 @@ async def process_chat_turn(text, tools_list, tool_router):
                     else:
                         return [{"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": "Error: Camera feed is offline."}]
 
-                print(f"[[ SYSTEM: Executing Tool -> {name} ]]")
+                console.print(f"  [dim white][[SYSTEM: Executing Tool -> {name}]][/]")
                 try:
                     args_data = tool_call.function.arguments
                     if isinstance(args_data, dict):
@@ -351,20 +300,24 @@ async def process_chat_turn(text, tools_list, tool_router):
             response = await client.chat.completions.create(**completion_args)
             message = response.choices[0].message
 
-        # we've either generated our texxt or hit iteration limit
+        # we've either generated our text or hit iteration limit
         final_text = message.content or ""
-        if iterations >= 5 and not final_text:
+        if iterations >= 10 and not final_text:
             final_text = "^start(animations/Stand/Gestures/IDontKnow_1) I'm having a little trouble finding that right now."
 
         total_time = time.time() - start_time
 
+        console.print(f"\n[bold plum2][[NAO]]:[/]")
+        wrapped_nao = textwrap.fill(final_text, width=90)
+        console.print(f"{wrapped_nao}")
+
         if iterations > 0:
-            print(
-                f"[[NAO]]: {final_text}\n  -> [Metrics] Total: {total_time:.2f}s (LLM Initial: {t_llm1:.2f}s | Tools: {total_tools_time:.2f}s | LLM Final: {(total_time - t_llm1 - total_tools_time):.2f}s)"
+            console.print(
+                f"  [bright_yellow]-> [Metrics] Total: {total_time:.2f}s (LLM Initial: {t_llm1:.2f}s | Tools: {total_tools_time:.2f}s | LLM Final: {(total_time - t_llm1 - total_tools_time):.2f}s)[/]"
             )
         else:
-            print(
-                f"[[NAO]]: {final_text}\n  -> [Metrics] Total: {total_time:.2f}s (No Tools)"
+            console.print(
+                f"  [bright_yellow]-> [Metrics] Total: {total_time:.2f}s (No Tools)[/]"
             )
 
         # save history
@@ -379,41 +332,44 @@ async def process_chat_turn(text, tools_list, tool_router):
             await asyncio.sleep(0.1)
 
     except Exception as e:
-        print(f"[[ OpenAI API Error: {e} ]]")
+        console.print(f"[bold red][[ OpenAI API Error: {e} ]][/]")
         safe_write(TRANSCRIPTION_FILE, "")
         safe_write(LISTEN_FILE, "yes")
 
 
 async def main():
     if not USE_LOCAL_LLM and not OPENAI_API_KEY:
-        print("[[ Error: OPENAI_API_KEY environment variable not set! ]]")
+        console.print("[bold red][[ Error: OPENAI_API_KEY environment variable not set! ]][/]")
         return
 
     init_files()
 
     async with AsyncExitStack() as stack:
         try:
-            print("[[ SYSTEM: Connecting to MCP servers... ]]")
+            console.print("[dim white][[ SYSTEM: Connecting to MCP servers... ]][/]")
             mcp_config_path = os.path.join(BASE_DIR, "mcp_config.json")
             tools_list, tool_router = await load_and_register_mcp_servers(
                 stack, mcp_config_path
             )
 
-            print("[[ SYSTEM: MCP tools ready. ]]")
+            console.print("[dim white][[ SYSTEM: MCP tools ready. ]][/]")
             safe_write(LISTEN_FILE, "yes")
         except Exception as e:
-            print(f"[[ Error initializing MCP: {e} ]]")
+            console.print(f"[bold red][[ Error initializing MCP: {e} ]][/]")
             tools_list = []
             tool_router = {}
             safe_write(LISTEN_FILE, "yes")
 
-        while True:
-            text = safe_read(TRANSCRIPTION_FILE)
+        try:
+            while True:
+                text = safe_read(TRANSCRIPTION_FILE)
 
-            if text:
-                await process_chat_turn(text, tools_list, tool_router)
+                if text:
+                    await process_chat_turn(text, tools_list, tool_router)
 
-            await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

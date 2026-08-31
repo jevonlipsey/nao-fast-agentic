@@ -15,10 +15,10 @@ from naoqi import ALProxy
 
 # allow importing from lib
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from lib.file_utils import safe_read, safe_write
+from lib.file_utils import safe_read, safe_write, get_env_var
 
-IP = "10.1.65.214"
-PORT = 9559
+IP = get_env_var("NAO_IP", "10.1.65.214")
+PORT = int(get_env_var("NAO_PORT", "9559"))
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DIR = os.path.join(BASE_DIR, "state")
@@ -32,56 +32,48 @@ def main():
     try:
         tts = ALProxy("ALTextToSpeech", IP, PORT)
         animated_speech = ALProxy("ALAnimatedSpeech", IP, PORT)
-        posture_proxy = ALProxy("ALRobotPosture", IP, PORT)
-        awareness_proxy = ALProxy("ALBasicAwareness", IP, PORT)
     except Exception as e:
         print("[[Error connecting to NAOqi. Is the robot IP correct?]]")
         print("Details: ", e)
         return
-
-    print("[[Setting Posture to StandInit...]]")
-    if posture_proxy.getPosture() != "Stand":
-        posture_proxy.goToPosture("StandInit", 1.0)
-
-    print("[[Enabling Basic Awareness...]]")
-    try:
-        # track faces
-        awareness_proxy.setEngagementMode("FullyEngaged")
-        awareness_proxy.startAwareness()
-    except Exception as e:
-        print("[[Basic Awareness Warning: ", e, " ]]")
 
     safe_write(LISTEN_FILE, "no")
     safe_write(RESPONSE_FILE, "")
 
     print("[[Robot Actuation Layer Ready]]")
 
-    while True:
-        try:
-            text = safe_read(RESPONSE_FILE)
-            if text:
-                # clear response file immediately so the LLM can write the final response 
-                # while the robot is still physically speaking this one
-                safe_write(RESPONSE_FILE, "")
+    try:
+        while True:
+            try:
+                text = safe_read(RESPONSE_FILE)
+                if text:
+                    # clear response file immediately so the LLM can write the final response 
+                    # while the robot is still physically speaking this one
+                    safe_write(RESPONSE_FILE, "")
 
-                text = text.replace("\n", " ")
+                    text = text.replace("\n", " ")
 
-                is_intermediate = text.startswith("[INTERMEDIATE] ")
-                if is_intermediate:
-                    text = text[len("[INTERMEDIATE] ") :]
+                    is_intermediate = text.startswith("[INTERMEDIATE] ")
+                    if is_intermediate:
+                        text = text[len("[INTERMEDIATE] ") :]
 
-                print("[[ACTUATING]]: {}".format(text))
+                    text_utf8 = text.encode("utf-8")
+                    animated_speech.say(text_utf8)
 
-                animated_speech.say(text.encode("utf-8"))
+                    if not is_intermediate:
+                        time.sleep(0.8) # Let physical room echo die down
+                        safe_write(LISTEN_FILE, "yes")
 
-                if not is_intermediate:
-                    safe_write(LISTEN_FILE, "yes")
-                    print("[[DONE]]")
-
-            time.sleep(0.1)
-        except Exception as e:
-            print("[[Actuation Loop Error: ", e, " ]]")
-            time.sleep(0.1)
+                time.sleep(0.1)
+            except Exception as e:
+                err_str = str(e)
+                if "Session closed" in err_str or "module destroyed" in err_str:
+                    print("\n[[ FATAL: Connection to robot lost (WiFi dropped). Please restart main.py ]]")
+                    sys.exit(1)
+                print("[[Actuation Loop Error: ", err_str, " ]]")
+                time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ python-dotenv>=1.0.0
 pydantic>=2.0.0
 Pillow>=10.0.0
 opencv-python>=4.0.0
+rich>=13.0.0
 
 # Non-Mac STT Fallback (Windows/Linux)
 openai-whisper>=20231117

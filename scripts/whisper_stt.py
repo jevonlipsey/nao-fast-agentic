@@ -16,9 +16,12 @@ import tempfile
 import threading
 import platform
 import sys
+from rich.console import Console
+
+console = Console()
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from lib.file_utils import safe_read, safe_write
+from lib.file_utils import safe_read, safe_write, get_env_var
 
 
 ### config
@@ -27,15 +30,19 @@ STATE_DIR = os.path.join(BASE_DIR, "state")
 
 LISTEN_FILE = os.path.join(STATE_DIR, "listen.txt")
 TRANSCRIPTION_FILE = os.path.join(STATE_DIR, "transcription.txt")
-MICROPHONE_INDEX = 3
+
+_mic_env = get_env_var("MICROPHONE_INDEX", "")
+MICROPHONE_INDEX = int(_mic_env) if _mic_env.strip() else None
 
 
 def _filter_stderr(proc, ready_event):
     for line in proc.stderr:
         if "[[STT_WORKER]]" in line:
-            print(line, end="", flush=True)
             if "[[STT_WORKER]]: ready" in line:
+                console.print(f"[dim white]{line.strip()}[/]")
                 ready_event.set()
+            else:
+                console.print(f"[dim white]{line.strip()}[/]")
 
 
 ## main loop
@@ -76,17 +83,23 @@ def main():
     if IS_MAC:
         swift_proc = start_swift_worker()
     else:
-        print("[[STT_WORKER]]: python whisper fallback ready")
+        console.print("[dim white][[STT_WORKER]]: python whisper fallback ready[/]")
 
     r = sr.Recognizer()
-    r.pause_threshold = 1.5
+    r.pause_threshold = 2.5
 
     with sr.Microphone(device_index=MICROPHONE_INDEX) as source:
+        if getattr(source, "stream", None) is None:
+            # Monkey-patch to prevent __exit__ crash in speech_recognition
+            source.stream = type('DummyStream', (), {'close': lambda self: None})()
+            console.print(f"[bold red][[ FATAL: Could not open microphone index {MICROPHONE_INDEX}. Is it a valid input device? ]][/]")
+            console.print("[bold red][[ Check your .env file or run the enumeration script to find the correct index. ]][/]")
+            sys.exit(1)
+            
         # run once for room ambience
         r.adjust_for_ambient_noise(source, duration=2.0)
 
-    was_listening = False
-    with sr.Microphone(device_index=MICROPHONE_INDEX) as source:
+        was_listening = False
         while True:
             state = safe_read(LISTEN_FILE)
             if state == "no":
@@ -95,7 +108,16 @@ def main():
                 continue
 
             if not was_listening:
-                print("[[LISTENING]]")
+                # Flush the PyAudio buffer so we don't accidentally transcribe the end of the robot's speech
+                try:
+                    if getattr(source, "stream", None) and hasattr(source.stream, "pyaudio_stream"):
+                        frames_avail = source.stream.pyaudio_stream.get_read_available()
+                        if frames_avail > 0:
+                            source.stream.pyaudio_stream.read(frames_avail, exception_on_overflow=False)
+                except Exception:
+                    pass
+                
+                console.print("[bold dark_orange][[LISTENING]][/]")
                 was_listening = True
 
             try:
@@ -106,14 +128,14 @@ def main():
                 # expected timeout, lets us loop back and re-check listen.txt frequently
                 continue
             except Exception as e:
-                print(f"[[ Error capturing audio: {e} ]]")
+                console.print(f"[bold red][[ Error capturing audio: {e} ]][/]")
                 continue
 
             text = ""
             if IS_MAC:
                 # revive worker if it crashed
                 if swift_proc is None or swift_proc.poll() is not None:
-                    print("[[ SYSTEM: Reviving crashed STT worker... ]]")
+                    console.print("[dim white][[ SYSTEM: Reviving crashed STT worker... ]][/]")
                     swift_proc = start_swift_worker()
 
                 # convert audio to .wav bytes and write to temp file
@@ -131,7 +153,7 @@ def main():
                     # wait for the CoreML transcription
                     text = swift_proc.stdout.readline().strip()
                 except BrokenPipeError:
-                    print("[[ SYSTEM: STT worker pipe broke. Restarting... ]]")
+                    console.print("[dim white][[ SYSTEM: STT worker pipe broke. Restarting... ]][/]")
                     swift_proc = start_swift_worker()
                     text = ""
 
@@ -139,7 +161,7 @@ def main():
                 try:
                     os.unlink(temp_wav.name)
                 except Exception as e:
-                    print(f"[[ Cleanup Error: {e} ]]")
+                    console.print(f"[bold red][[ Cleanup Error: {e} ]][/]")
             else:
                 # fallback to standard python whisper
                 try:
@@ -147,7 +169,7 @@ def main():
                 except sr.UnknownValueError:
                     text = ""
                 except Exception as e:
-                    print(f"[[ Whisper Fallback Error: {e} ]]")
+                    console.print(f"[bold red][[ Whisper Fallback Error: {e} ]][/]")
 
             # minimal hallucinations filter
             hallucinations = [
@@ -161,7 +183,11 @@ def main():
             if text and text.lower() not in hallucinations:
                 # pass to openai speech
                 safe_write(TRANSCRIPTION_FILE, text)
-
+                safe_write(LISTEN_FILE, "no")
+                was_listening = False
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

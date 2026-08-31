@@ -10,7 +10,7 @@
     },
     "memory": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "args": ["-y", "--silent", "@modelcontextprotocol/server-memory"],
       "env": {
         "MEMORY_FILE_PATH": "./memory.jsonl"
       }
@@ -19,6 +19,7 @@
       "command": "npx",
       "args": [
         "-y",
+        "--silent",
         "@modelcontextprotocol/server-filesystem",
         "./context"
       ]
@@ -29,6 +30,15 @@
         "run",
         "--directory",
         "./mcp-servers/vision_reader",
+        "server.py"
+      ]
+    },
+    "nao_actuation": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "./mcp-servers/nao_actuation",
         "server.py"
       ]
     }

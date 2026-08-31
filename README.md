@@ -20,6 +20,7 @@ The pipeline runs four processes in parallel, coordinated through text/jpg files
 | `openai_response.py`         | Sends transcriptions to the LLM, executes tool calls, writes responses | Python 3.10+                      |
 | `nao_tts.py` / `mock_nao.py` | Reads responses and makes the robot speak and gesture                  | Python 2.7 (Conda) / Python 3.10+ |
 | `nao_vision.py`              | Polls the robot's top camera at 1 FPS and saves the frame              | Python 2.7 (Conda)                |
+| `nao_daemon.py`              | TCP listener for hardware actuation commands from the MCP server       | Python 2.7 (Conda)                |
 
 On macOS, speech-to-text uses a compiled Swift CoreML worker for fast local transcription. On Windows and Linux, it falls back to Python Whisper.
 
@@ -174,13 +175,18 @@ python scripts/test_connection.py
 
 To change which microphone the system listens on, open `scripts/whisper_stt.py` and update the `MICROPHONE_INDEX` variable. There is a commented-out code block in the `main()` function that lists all available audio devices and their indexes when uncommented.
 
-### Adding Native Tools
+### Hardware Control & Native Tools
 
-The robot's tool capabilities are defined primarily via MCP servers, but some tightly coupled hardware features (like the `take_picture` tool) are implemented natively inside `scripts/openai_response.py`.
+Because the Nao robot's hardware SDK only supports Python 2.7, physical movement is handled via a **two-tier architecture**:
 
-The `take_picture` tool interacts with `scripts/nao_vision.py` (which runs in Python 2.7 and grabs a frame every second, saving it to `state/latest_frame.jpg`). The LLM reads this file when using the tool, creating an ultra-fast, low-latency live vision pipeline without the overhead of an MCP server. (Note: When running in Mock mode, `scripts/mock_vision.py` captures frames from your computer's webcam instead, allowing you to test the full vision pipeline without the robot).d
+1. **The Legacy Daemon:** `scripts/nao_daemon.py` runs in the background in the isolated Python 2.7 Conda environment. It binds to a local TCP socket (port 5005) and listens for hardware commands.
+2. **The Modern MCP Server:** The `nao_actuation` MCP server (Python 3.10+) exposes modern tool endpoints (`set_posture`, `look_around`, `toggle_awareness`, `set_eye_color`) to the LLM. When the LLM calls a tool, the MCP server forwards the execution command over TCP to the daemon.
 
-Additionally, `mcp-servers/` has one custom local MCP called `vision-reader`. This tool allows PDFs and images to get piped cleanly through OpenAi's API endpoint.
+Some tightly coupled hardware features, like the `take_picture` tool, are implemented natively directly inside `scripts/openai_response.py`. The `take_picture` tool interacts with `scripts/nao_vision.py` (which runs in Python 2.7 and grabs a frame every second, saving it to `state/latest_frame.jpg`). The LLM reads this file when using the tool, creating an ultra-fast, low-latency live vision pipeline without the overhead of an MCP server.
+
+*(Note: When running in Mock mode, `scripts/simulation/mock_vision.py` captures frames from your computer's webcam instead, allowing you to test the full vision pipeline without the robot).*
+
+Additionally, `mcp-servers/` has one custom local MCP called `vision_reader`. This tool allows PDFs and images to get piped cleanly through OpenAI's API endpoint.
 
 ### Adding MCP Tools
 
@@ -219,12 +225,20 @@ nao-fast-agentic/
   scripts/
     whisper_stt.py          # speech-to-text (CoreML on Mac, Whisper fallback elsewhere)
     openai_response.py      # LLM communication and MCP tool execution
-    nao_tts.py              # robot actuation (Python 2.7, runs in the nao Conda env)
-    mock_nao.py             # terminal-based mock of the robot for testing
+    nao_tts.py              # basic text-to-speech module (Python 2.7)
+    nao_vision.py           # legacy camera poller (Python 2.7)
+    nao_daemon.py           # TCP socket server for hardware actuation (Python 2.7)
     test_connection.py      # standalone script to verify robot IP (Python 2.7)
+    simulation/
+      mock_nao.py           # terminal-based mock of the robot TTS
+      mock_vision.py        # captures webcam frames instead of robot camera
+      mock_daemon.py        # mock TCP socket server to prevent MCP crashes
     lib/
       file_utils.py         # shared file I/O with retry logic (Python 2/3 compatible)
       mcp_loader.py         # dynamic MCP server loader
+  mcp-servers/
+    vision_reader/          # custom local MCP server for PDF/Image reading
+    nao_actuation/          # custom local MCP server routing LLM commands to nao_daemon
   stt-coreml/               # Swift CoreML speech-to-text worker (macOS)
   state/                    # IPC text files (listen, response, transcription, history)
 ```
