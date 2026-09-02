@@ -37,12 +37,15 @@ MICROPHONE_INDEX = int(_mic_env) if _mic_env.strip() else None
 
 def _filter_stderr(proc, ready_event):
     for line in proc.stderr:
-        if "[[STT_WORKER]]" in line:
-            if "[[STT_WORKER]]: ready" in line:
+        line_lower = line.lower()
+        if "[[stt_worker]]" in line_lower:
+            if "ready" in line_lower:
                 console.print(f"[dim white]{line.strip()}[/]")
                 ready_event.set()
             else:
                 console.print(f"[dim white]{line.strip()}[/]")
+        elif "error" in line_lower or "failed" in line_lower or "exception" in line_lower:
+            console.print(f"[bold red][[STT_WORKER ERROR]]: {line.strip()}[/]")
 
 
 ## main loop
