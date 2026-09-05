@@ -21,12 +21,17 @@ def main():
         posture = ALProxy("ALRobotPosture", IP, PORT)
         leds = ALProxy("ALLeds", IP, PORT)
         awareness = ALProxy("ALBasicAwareness", IP, PORT)
+        memory = ALProxy("ALMemory", IP, PORT)
+        try:
+            life = ALProxy("ALAutonomousLife", IP, PORT)
+        except Exception:
+            life = None
     except Exception as e:
         print("[[Error connecting to NAOqi. Is the robot IP correct?]]")
         print("Details: ", e)
         return
 
-    # Initialize to a sane default
+    # initialize to a sane default
     print("[[Setting Posture to StandInit...]]")
     if posture.getPosture() != "Stand":
         posture.goToPosture("StandInit", 1.0)
@@ -39,7 +44,7 @@ def main():
     except Exception as e:
         print("[[Basic Awareness Warning: ", e, " ]]")
 
-    # Create TCP Socket
+    # create tcp socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(('127.0.0.1', DAEMON_PORT))
@@ -70,18 +75,18 @@ def main():
                     names = ["HeadPitch", "HeadYaw"]
                     angles = [args.get("pitch", 0.0), args.get("yaw", 0.0)]
                     
-                    # Ensure awareness is stopped so it doesn't fight the head movement
+                    # ensure awareness is stopped so it doesn't fight the head movement
                     try:
                         if awareness.isAwarenessRunning():
                             awareness.stopAwareness()
                     except Exception:
                         pass
                         
-                    # Ensure head motors are powered on
+                    # ensure head motors are powered on
                     motion.setStiffnesses("Head", 1.0)
                     
-                    # Use blocking call so it finishes moving BEFORE returning success to the LLM
-                    motion.angleInterpolationWithSpeed(names, angles, 0.2)
+                    # use brisk 0.35 fractionmaxspeed so head reaches target before photo
+                    motion.angleInterpolationWithSpeed(names, angles, 0.35)
                 elif command == "setAwareness":
                     state = args.get("state", True)
                     if state:
@@ -89,15 +94,31 @@ def main():
                     else:
                         awareness.stopAwareness()
                 elif command == "fadeRGB":
-                    # args: name (e.g. "FaceLeds"), r, g, b, duration
+                    # args: name (e.g. "faceleds"), r, g, b, duration
                     name = args.get("name", "FaceLeds")
                     if isinstance(name, unicode):
                         name = name.encode("utf-8")
-                    r = args.get("r", 1.0)
-                    g = args.get("g", 1.0)
-                    b = args.get("b", 1.0)
-                    duration = args.get("duration", 1.0)
+                    r = float(args.get("r", 1.0))
+                    g = float(args.get("g", 1.0))
+                    b = float(args.get("b", 1.0))
+                    duration = float(args.get("duration", 0.5))
+
+                    # temporarily disable autonomous blinking if life proxy exists so leds don't get overwritten immediately
+                    if life:
+                        try:
+                            life.setAutonomousAbilityEnabled("AutonomousBlinking", False)
+                        except Exception:
+                            pass
+
                     leds.fadeRGB(name, r, g, b, duration)
+                elif command == "saveName":
+                    person_id = args.get("id")
+                    name = args.get("name")
+                    if isinstance(name, unicode):
+                        name = name.encode("utf-8")
+                    # store in almemory
+                    memory.insertData("KnownHumans/" + str(person_id), name)
+                    print("[[ALMemory Saved: KnownHumans/{} = {}]]".format(person_id, name))
                 else:
                     raise ValueError("Unknown command: " + str(command))
                 

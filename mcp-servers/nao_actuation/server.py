@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Initialize FastMCP server
+# initialize fastmcp server
 mcp = FastMCP("nao_actuation")
 
 DAEMON_HOST = '127.0.0.1'
@@ -62,7 +62,7 @@ def look_around(pitch: float, yaw: float) -> list[TextContent]:
     If a previous picture missed the target, use this tool to guess where it is, then immediately call take_picture again.
     NOTE: This automatically turns off ALBasicAwareness so your head can freely move. You MUST call toggle_awareness(True) when you are done taking pictures to resume tracking the user.
     """
-    # Clamp values just in case
+    # clamp values just in case
     pitch = max(-0.6, min(0.5, pitch))
     yaw = max(-2.0, min(2.0, yaw))
     
@@ -78,6 +78,36 @@ def toggle_awareness(state: bool) -> list[TextContent]:
     Turn this off if the constant movement is distracting or if you need to stare perfectly still at a fixed point.
     """
     return send_command("setAwareness", {"state": state})
+
+@mcp.tool()
+def save_name(person_id: int, name: str) -> list[TextContent]:
+    """
+    Saves a human's name to the robot's onboard ALMemory using their ID.
+    Always use this tool immediately when a person tells you their name!
+    """
+    return send_command("saveName", {"id": person_id, "name": name})
+
+@mcp.tool()
+def select_camera(camera: str) -> list[TextContent]:
+    """
+    Selects which physical camera the robot uses.
+    Valid values:
+    - 'top': Top camera in forehead/eyes (best for faces, people, gazing around the room).
+    - 'bottom': Bottom camera angled down at the desk/table (best for examining documents, papers, objects on the table).
+    """
+    cam_str = camera.strip().lower()
+    cam_idx = 0 if cam_str == "top" else (1 if cam_str == "bottom" else None)
+    if cam_idx is None:
+        return [TextContent(type="text", text="Error: camera must be either 'top' or 'bottom'.")]
+
+    state_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "state")
+    cam_file = os.path.join(state_dir, "camera_index.txt")
+    try:
+        with open(cam_file, "w") as f:
+            f.write(str(cam_idx))
+        return [TextContent(type="text", text=f"Switched active camera to {cam_str}.")]
+    except Exception as e:
+        return [TextContent(type="text", text=f"Error setting camera: {e}")]
 
 
 @mcp.tool()

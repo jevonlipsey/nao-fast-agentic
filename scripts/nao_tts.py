@@ -47,7 +47,7 @@ def main():
             try:
                 text = safe_read(RESPONSE_FILE)
                 if text:
-                    # clear response file immediately so the LLM can write the final response 
+                    # clear response file immediately so the llm can write the final response 
                     # while the robot is still physically speaking this one
                     safe_write(RESPONSE_FILE, "")
 
@@ -57,14 +57,18 @@ def main():
                     if is_intermediate:
                         text = text[len("[INTERMEDIATE] ") :]
 
-                    text_utf8 = text.encode("utf-8")
+                    # strip markdown artifacts that mess up alanimatedspeech
+                    clean_text = text.replace("**", "").replace("*", "").replace("`", "")
+                    clean_text = " ".join(clean_text.split())
+
+                    text_utf8 = clean_text.encode("utf-8")
                     animated_speech.say(text_utf8)
 
                     if not is_intermediate:
-                        time.sleep(0.8) # Let physical room echo die down
+                        time.sleep(0.15) # brief buffer before enabling mic
                         safe_write(LISTEN_FILE, "yes")
 
-                time.sleep(0.1)
+                time.sleep(0.03)
             except Exception as e:
                 err_str = str(e)
                 if "Session closed" in err_str or "module destroyed" in err_str:

@@ -32,7 +32,7 @@ async def load_and_register_mcp_servers(stack: AsyncExitStack, config_path: str)
         args = [_resolve_path(a, base_dir) for a in server_config.get("args", [])]
         env = server_config.get("env", None)
 
-        # merge system env if custom env is provided to ensure PATH works
+        # merge system env if custom env is provided to ensure path works
         if env is not None:
             env = {k: _resolve_path(v, base_dir) for k, v in env.items()}
             merged_env = os.environ.copy()
@@ -53,7 +53,7 @@ async def load_and_register_mcp_servers(stack: AsyncExitStack, config_path: str)
         except Exception as e:
             print(f"[[Error initializing MCP server '{server_name}': {e}]]")
 
-    # build MCP tool registry
+    # build mcp tool registry
     tools_list = []
     tool_router = {}
 

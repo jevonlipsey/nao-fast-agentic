@@ -89,11 +89,11 @@ def main():
         console.print("[dim white][[STT_WORKER]]: python whisper fallback ready[/]")
 
     r = sr.Recognizer()
-    r.pause_threshold = 2.5
+    r.pause_threshold = 0.8
 
     with sr.Microphone(device_index=MICROPHONE_INDEX) as source:
         if getattr(source, "stream", None) is None:
-            # Monkey-patch to prevent __exit__ crash in speech_recognition
+            # monkey-patch to prevent __exit__ crash in speech_recognition
             source.stream = type('DummyStream', (), {'close': lambda self: None})()
             console.print(f"[bold red][[ FATAL: Could not open microphone index {MICROPHONE_INDEX}. Is it a valid input device? ]][/]")
             console.print("[bold red][[ Check your .env file or run the enumeration script to find the correct index. ]][/]")
@@ -107,16 +107,18 @@ def main():
             state = safe_read(LISTEN_FILE)
             if state == "no":
                 was_listening = False
-                time.sleep(0.1)
+                time.sleep(0.03)
                 continue
 
             if not was_listening:
-                # Flush the PyAudio buffer so we don't accidentally transcribe the end of the robot's speech
+                # flush the pyaudio buffer so we don't accidentally transcribe the end of the robot's speech
                 try:
                     if getattr(source, "stream", None) and hasattr(source.stream, "pyaudio_stream"):
-                        frames_avail = source.stream.pyaudio_stream.get_read_available()
-                        if frames_avail > 0:
-                            source.stream.pyaudio_stream.read(frames_avail, exception_on_overflow=False)
+                        pa_stream = source.stream.pyaudio_stream
+                        if pa_stream and pa_stream.is_active():
+                            frames_avail = pa_stream.get_read_available()
+                            if 0 < frames_avail < 32768:
+                                pa_stream.read(frames_avail, exception_on_overflow=False)
                 except Exception:
                     pass
                 
@@ -124,7 +126,7 @@ def main():
                 was_listening = True
 
             try:
-                # blocks briefly. if no speech is heard, raises WaitTimeoutError and breaks.
+                # blocks briefly. if no speech is heard, raises waittimeouterror and breaks.
                 # phrase_time_limit caps runaway recording if ambient noise stays high
                 audio = r.listen(source, timeout=1, phrase_time_limit=15)
             except sr.WaitTimeoutError:
@@ -153,7 +155,7 @@ def main():
                     swift_proc.stdin.write(temp_wav.name + "\n")
                     swift_proc.stdin.flush()
 
-                    # wait for the CoreML transcription
+                    # wait for the coreml transcription
                     text = swift_proc.stdout.readline().strip()
                 except BrokenPipeError:
                     console.print("[dim white][[ SYSTEM: STT worker pipe broke. Restarting... ]][/]")

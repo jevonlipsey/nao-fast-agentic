@@ -37,7 +37,7 @@ def read_document(filepath: str) -> list[TextContent | ImageContent]:
     ext = os.path.splitext(filepath)[1].lower()
 
     try:
-        # PDFs
+        # pdfs
         if ext == ".pdf" or mime_type == "application/pdf":
             reader = PdfReader(filepath)
             text = ""
@@ -49,7 +49,7 @@ def read_document(filepath: str) -> list[TextContent | ImageContent]:
                 text = "[System: The PDF was parsed successfully but no extractable text was found (it may be a scanned image).]"
             return [TextContent(type="text", text=f"Extracted PDF Text:\n\n{text}")]
 
-        # Images
+        # images
         elif mime_type and mime_type.startswith("image/"):
             with Image.open(filepath) as img:
                 # compress

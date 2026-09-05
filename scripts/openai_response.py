@@ -45,11 +45,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DIR = os.path.join(BASE_DIR, "state")
 
 TRANSCRIPTION_FILE = os.path.join(STATE_DIR, "transcription.txt")
+EVENTS_FILE = os.path.join(STATE_DIR, "events.txt")
 RESPONSE_FILE = os.path.join(STATE_DIR, "response.txt")
 LISTEN_FILE = os.path.join(STATE_DIR, "listen.txt")
 HISTORY_FILE = os.path.join(STATE_DIR, "history.txt")
 
-# Read system prompt
+# read system prompt
 prompt_path = os.path.join(BASE_DIR, "config", "system_prompt.md")
 SYSTEM_PROMPT = safe_read(prompt_path)
 if "{CONTEXT_DIR}" in SYSTEM_PROMPT:
@@ -72,7 +73,7 @@ FILLER_PHRASES = [
 
 ### core
 def init_files():
-    for f in [TRANSCRIPTION_FILE, RESPONSE_FILE]:
+    for f in [TRANSCRIPTION_FILE, RESPONSE_FILE, EVENTS_FILE]:
         safe_write(f, "")
     safe_write(LISTEN_FILE, "no")
 
@@ -116,7 +117,11 @@ async def process_chat_turn(text, tools_list, tool_router):
     messages = [{"role": "system", "content": SYSTEM_PROMPT}] + chat_history
 
     wrapped_user = textwrap.fill(text, width=90)
-    console.print(f"\n[bold cyan][[USER]]:[/] {wrapped_user}")
+    if text.startswith("[SYSTEM EVENT]"):
+        console.print(f"\n[dim white]{wrapped_user}[/]")
+    else:
+        console.print(f"\n[bold cyan][[USER]]:[/] {wrapped_user}")
+    
     start_time = time.time()
 
     try:
@@ -128,10 +133,12 @@ async def process_chat_turn(text, tools_list, tool_router):
             }
         }
         
-        # Inject it into the tools list we give to OpenAI
+        # inject it into the tools list we give to openai
         active_tools = tools_list + [CAMERA_TOOL] if tools_list else [CAMERA_TOOL]
 
         completion_args = {"model": MODEL, "messages": messages, "timeout": 60.0}
+        if text.startswith("[SYSTEM EVENT]"):
+            completion_args["max_tokens"] = 60
         if USE_LOCAL_LLM:
             completion_args["extra_body"] = {"options": {"num_ctx": 4096}}
         if active_tools:
@@ -145,9 +152,16 @@ async def process_chat_turn(text, tools_list, tool_router):
         iterations = 0
         total_tools_time = 0
 
+        # fast tools that execute locally in milliseconds and should not trigger spoken filler phrases
+        SILENT_TOOLS = {"save_name", "set_eye_color", "toggle_awareness", "set_posture"}
+
         while hasattr(message, "tool_calls") and message.tool_calls and iterations < 10:
-            # inject filler phrase immediately on first tool call
-            if iterations == 0:
+            # check if all tools in this batch are fast local tools
+            tool_names = {tc.function.name for tc in message.tool_calls}
+            is_silent_batch = tool_names.issubset(SILENT_TOOLS)
+
+            # inject filler phrase immediately on first tool call, unless it's a system event or silent tool batch
+            if iterations == 0 and not text.startswith("[SYSTEM EVENT]") and not is_silent_batch:
                 filler_phrase = random.choice(FILLER_PHRASES)
                 filler = "[INTERMEDIATE] " + filler_phrase
                 safe_write(RESPONSE_FILE, filler)
@@ -167,7 +181,7 @@ async def process_chat_turn(text, tools_list, tool_router):
                 if name == "take_picture":
                     console.print(f"  [dim white][[SYSTEM: Executing Tool -> take_picture (Native)]][/]")
                     
-                    # Wait 0.6 seconds to ensure the camera daemon writes a fresh, post-movement frame
+                    # wait 0.6 seconds to ensure the camera daemon writes a fresh, post-movement frame
                     await asyncio.sleep(0.6)
                     
                     frame_path = os.path.join(STATE_DIR, "latest_frame.jpg")
@@ -295,7 +309,7 @@ async def process_chat_turn(text, tools_list, tool_router):
 
             total_tools_time += time.time() - t_tools_start
 
-            # secondary call to synthesize response OR generate next tool call
+            # secondary call to synthesize response or generate next tool call
             iterations += 1
             response = await client.chat.completions.create(**completion_args)
             message = response.choices[0].message
@@ -322,14 +336,19 @@ async def process_chat_turn(text, tools_list, tool_router):
 
         # save history
         chat_history.append({"role": "assistant", "content": final_text})
-        save_history(chat_history)
+        
+        # wipe context clean after someone leaves so the next person gets a fresh interaction
+        if text.startswith("[SYSTEM EVENT]") and "just left." in text:
+            save_history([])
+        else:
+            save_history(chat_history)
 
         # clear transcription queue
         safe_write(TRANSCRIPTION_FILE, "")
         safe_write(RESPONSE_FILE, final_text)
 
         while safe_read(LISTEN_FILE) != "yes":
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.02)
 
     except Exception as e:
         console.print(f"[bold red][[ OpenAI API Error: {e} ]][/]")
@@ -362,12 +381,17 @@ async def main():
 
         try:
             while True:
-                text = safe_read(TRANSCRIPTION_FILE)
+                event_text = safe_read(EVENTS_FILE)
+                if event_text:
+                    safe_write(EVENTS_FILE, "")
+                    await process_chat_turn(event_text, tools_list, tool_router)
+                    continue
 
+                text = safe_read(TRANSCRIPTION_FILE)
                 if text:
                     await process_chat_turn(text, tools_list, tool_router)
 
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.02)
         except KeyboardInterrupt:
             pass
 

@@ -5,20 +5,35 @@ from rich.console import Console
 
 console = Console()
 
-# Root project directory is 3 levels up from this file
+# root project directory is 3 levels up from this file
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STATE_DIR = os.path.join(BASE_DIR, "state")
 FRAME_FILE = os.path.join(STATE_DIR, "latest_frame.jpg")
 
 
 def main():
-    console.print("[dim white][[Starting Mock Vision (Mac Webcam)...]][/]")
+    console.print("[dim white][[Starting Mock Vision (Webcam)...]][/]")
 
-    # 0 is usually the default built-in webcam, my default is 1
-    cap = cv2.VideoCapture(1)
+    # check .env or auto-detect webcam index (try 0 then 1)
+    env_idx = os.environ.get("WEBCAM_INDEX", "")
+    if env_idx.isdigit():
+        cam_indices = [int(env_idx)]
+    else:
+        cam_indices = [0, 1]
 
-    if not cap.isOpened():
-        console.print("[bold red][[Error: Could not open webcam.]][/]")
+    cap = None
+    for idx in cam_indices:
+        test_cap = cv2.VideoCapture(idx)
+        if test_cap.isOpened():
+            ret, _ = test_cap.read()
+            if ret:
+                cap = test_cap
+                console.print(f"[dim white][[Mock Vision: Connected to webcam index {idx}]][/]")
+                break
+            test_cap.release()
+
+    if cap is None or not cap.isOpened():
+        console.print("[bold red][[Error: Could not open any webcam (tried indices 0, 1).]][/]")
         return
 
     console.print("[dim white][[Mock Camera Polling Layer Ready]][/]")
@@ -27,12 +42,12 @@ def main():
         while True:
             ret, frame = cap.read()
             if ret:
-                # Resize to roughly 640x480 to mimic the Nao's camera resolution
+                # resize to roughly 640x480 to mimic the nao's camera resolution
                 frame = cv2.resize(frame, (640, 480))
-                # Save as JPEG with 80% quality
+                # save as jpeg with 80% quality
                 cv2.imwrite(FRAME_FILE, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
 
-            # Write a frame every 0.25 seconds, matching the physical robot
+            # write a frame every 0.25 seconds, matching the physical robot
             time.sleep(0.25)
 
     except KeyboardInterrupt:

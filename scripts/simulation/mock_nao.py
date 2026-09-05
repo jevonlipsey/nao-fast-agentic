@@ -12,7 +12,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lib.file_utils import safe_read, safe_write
 
-# Root project directory is 3 levels up from this file
+# root project directory is 3 levels up from this file
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STATE_DIR = os.path.join(BASE_DIR, "state")
 
@@ -25,7 +25,7 @@ try:
             text = safe_read(RESPONSE_FILE)
 
             if text:
-                # clear response file immediately so the LLM can write the final response 
+                # clear response file immediately so the llm can write the final response 
                 # while the robot is still "speaking" this one
                 safe_write(RESPONSE_FILE, "")
 
@@ -33,17 +33,19 @@ try:
 
                 if is_intermediate:
                     text = text[len("[INTERMEDIATE] ") :]
-                    time.sleep(1.0)
+                    time.sleep(0.4)
                 else:
-                    time.sleep(2.0)
+                    # estimate reading time: ~12 chars/sec or at least 0.5s
+                    spoken_time = max(0.6, min(2.5, len(text) / 15.0))
+                    time.sleep(spoken_time)
 
                 # signal ready to listen after final response
                 if not is_intermediate:
-                    time.sleep(0.8) # Let physical room echo die down
+                    time.sleep(0.15) # match physical robot's quick buffer flush
                     safe_write(LISTEN_FILE, "yes")
         except Exception:
             pass
 
-        time.sleep(0.2)
+        time.sleep(0.03)
 except KeyboardInterrupt:
     pass

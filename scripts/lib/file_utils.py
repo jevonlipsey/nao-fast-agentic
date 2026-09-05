@@ -66,12 +66,12 @@ def get_env_var(key, default=None, env_path=None):
                             v = v[1:-1]
                         elif v.startswith("'") and v.endswith("'"):
                             v = v[1:-1]
-                        # In Python 2, ALProxy requires str (bytes), not unicode
+                        # in python 2, alproxy requires str (bytes), not unicode
                         try:
                             if isinstance(v, unicode):
                                 v = v.encode("utf-8")
                         except NameError:
-                            pass # Python 3
+                            pass # python 3
                         return v
     except IOError:
         pass

@@ -7,7 +7,7 @@ from rich.console import Console
 console = Console()
 
 ### config
-USE_MOCK_NAO = False  # set False to connect to the physical robot via the nao conda env
+USE_MOCK_NAO = False  # set false to connect to the physical robot via the nao conda env
 
 SCRIPTS = [
     "whisper_stt.py",
@@ -20,13 +20,13 @@ def main():
     processes = []
 
     try:
-        # Launch standard Python 3 scripts
+        # launch standard python 3 scripts
         for script in SCRIPTS:
             script_path = os.path.join(script_dir, "scripts", script)
             p = subprocess.Popen([sys.executable, script_path], cwd=script_dir)
             processes.append(p)
 
-        # Delete cached vision frame if it exists
+        # delete cached vision frame if it exists
         frame_path = os.path.join(script_dir, "state", "latest_frame.jpg")
         if os.path.exists(frame_path):
             try:
@@ -34,36 +34,43 @@ def main():
             except Exception:
                 pass
 
-        # Launch the Actuation layer (Mock or Real Nao)
+        # launch the actuation layer (mock or real nao)
         if USE_MOCK_NAO:
             nao_mode = "mock"
 
-            # Launch TTS Mock
+            # launch tts mock
             script_path = os.path.join(
                 script_dir, "scripts", "simulation", "mock_nao.py"
             )
             p_tts = subprocess.Popen([sys.executable, script_path], cwd=script_dir)
             processes.append(p_tts)
 
-            # Launch Vision Mock
+            # launch vision mock
             vision_path = os.path.join(
                 script_dir, "scripts", "simulation", "mock_vision.py"
             )
             p_vis = subprocess.Popen([sys.executable, vision_path], cwd=script_dir)
             processes.append(p_vis)
 
-            # Launch Daemon Mock
+            # launch daemon mock
             daemon_path = os.path.join(
                 script_dir, "scripts", "simulation", "mock_daemon.py"
             )
             p_dae = subprocess.Popen([sys.executable, daemon_path], cwd=script_dir)
             processes.append(p_dae)
+
+            # launch events mock
+            events_path = os.path.join(
+                script_dir, "scripts", "simulation", "mock_events.py"
+            )
+            p_evt = subprocess.Popen([sys.executable, events_path], cwd=script_dir)
+            processes.append(p_evt)
         else:
             nao_mode = "physical"
 
-            # Launch TTS
+            # launch tts
             script_path = os.path.join(script_dir, "scripts", "nao_tts.py")
-            # Use conda run to execute the script in the isolated Python 2.7 environment
+            # use conda run to execute the script in the isolated python 2.7 environment
             p_tts = subprocess.Popen(
                 [
                     "conda",
@@ -78,7 +85,7 @@ def main():
             )
             processes.append(p_tts)
 
-            # Launch Vision
+            # launch vision
             vision_path = os.path.join(script_dir, "scripts", "nao_vision.py")
             p_vis = subprocess.Popen(
                 [
@@ -94,7 +101,7 @@ def main():
             )
             processes.append(p_vis)
 
-            # Launch Daemon
+            # launch daemon
             daemon_path = os.path.join(script_dir, "scripts", "nao_daemon.py")
             p_dae = subprocess.Popen(
                 [
@@ -110,6 +117,22 @@ def main():
             )
             processes.append(p_dae)
 
+            # launch events
+            events_path = os.path.join(script_dir, "scripts", "nao_events.py")
+            p_evt = subprocess.Popen(
+                [
+                    "conda",
+                    "run",
+                    "--no-capture-output",
+                    "-n",
+                    "nao",
+                    "python",
+                    events_path,
+                ],
+                cwd=script_dir,
+            )
+            processes.append(p_evt)
+
         console.print(f"[dim white][[PIPELINE]]: running  |  nao={nao_mode}[/]\n")
 
         while True:
@@ -122,6 +145,16 @@ def main():
                 p.kill()  # force kill to prevent hanging
             except Exception:
                 pass
+        
+        # aggressively kill any orphaned conda run child processes holding ports
+        try:
+            os.system(r"pkill -f 'python.*nao_daemon\.py'")
+            os.system(r"pkill -f 'python.*nao_vision\.py'")
+            os.system(r"pkill -f 'python.*nao_tts\.py'")
+            os.system(r"pkill -f 'python.*nao_events\.py'")
+        except Exception:
+            pass
+
         for p in processes:
             try:
                 p.wait(timeout=1)
