@@ -9,18 +9,15 @@
       "args": ["-q", "mcp-server-time"]
     },
     "memory": {
-      "command": "npx",
-      "args": ["-y", "--silent", "@modelcontextprotocol/server-memory"],
+      "command": "mcp-server-memory",
+      "args": [],
       "env": {
         "MEMORY_FILE_PATH": "./memory.jsonl"
       }
     },
     "context_folder": {
-      "command": "npx",
+      "command": "mcp-server-filesystem",
       "args": [
-        "-y",
-        "--silent",
-        "@modelcontextprotocol/server-filesystem",
         "./context"
       ]
     },

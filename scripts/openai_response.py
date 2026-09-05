@@ -13,6 +13,7 @@ import random
 import asyncio
 import sys
 import textwrap
+import re
 from dotenv import load_dotenv
 from contextlib import AsyncExitStack
 from openai import AsyncOpenAI
@@ -20,7 +21,7 @@ from rich.console import Console
 
 # allow importing from lib
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from lib.file_utils import safe_read, safe_write
+from lib.file_utils import safe_read, safe_write, queue_push
 from lib.mcp_loader import load_and_register_mcp_servers
 
 load_dotenv()
@@ -138,51 +139,193 @@ async def process_chat_turn(text, tools_list, tool_router):
 
         completion_args = {"model": MODEL, "messages": messages, "timeout": 60.0}
         if text.startswith("[SYSTEM EVENT]"):
-            completion_args["max_tokens"] = 60
+            completion_args["max_completion_tokens"] = 60
         if USE_LOCAL_LLM:
             completion_args["extra_body"] = {"options": {"num_ctx": 4096}}
         if active_tools:
             completion_args["tools"] = active_tools
 
-        response = await client.chat.completions.create(**completion_args)
-        t_llm1 = time.time() - start_time
-        message = response.choices[0].message
+        # helper function to stream speech output sentence-by-sentence
+        async def stream_final_response(args):
+            s_args = dict(args)
+            s_args.pop("tools", None)
+            s_args["stream"] = True
 
-        # handle tool calls with a loop (max 10 iterations to prevent infinite loops)
+            stream = await client.chat.completions.create(**s_args)
+            buf = ""
+            full_text = ""
+            first_voice_time = None
+
+            console.print(f"\n[bold plum2][[NAO]]:[/]")
+
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content or ""
+                if delta:
+                    if first_voice_time is None:
+                        first_voice_time = time.time() - start_time
+                    buf += delta
+                    full_text += delta
+                    sys.stdout.write(delta)
+                    sys.stdout.flush()
+
+                    # check if we have a complete sentence ready to push to tts
+                    open_paren = buf.count("(") - buf.count(")")
+                    open_slash = buf.count("\\") % 2
+
+                    if open_paren <= 0 and open_slash == 0 and len(buf.strip()) >= 15:
+                        match = re.search(r'([.!?]+(?:\s+|$))', buf)
+                        if match:
+                            end_pos = match.end()
+                            sentence = buf[:end_pos].strip()
+                            buf = buf[end_pos:]
+                            if sentence:
+                                queue_push(RESPONSE_FILE, sentence)
+
+            remaining = buf.strip()
+            if remaining:
+                queue_push(RESPONSE_FILE, remaining)
+            queue_push(RESPONSE_FILE, "[END_OF_TURN]")
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+            return full_text, first_voice_time
+
+        # single-stream execution: stream the initial completion directly!
+        # if the model emits tool calls, we accumulate them and execute.
+        # if the model emits words, sentence 1 is pushed to the tts queue in ~300ms!
+        stream_completion_args = dict(completion_args)
+        stream_completion_args["stream"] = True
+
+        response_stream = await client.chat.completions.create(**stream_completion_args)
+
+        collected_content = ""
+        collected_tool_calls = {}
+        t_first_voice = None
+
         iterations = 0
         total_tools_time = 0
-
-        # fast tools that execute locally in milliseconds and should not trigger spoken filler phrases
         SILENT_TOOLS = {"save_name", "set_eye_color", "toggle_awareness", "set_posture"}
 
-        while hasattr(message, "tool_calls") and message.tool_calls and iterations < 10:
-            # check if all tools in this batch are fast local tools
-            tool_names = {tc.function.name for tc in message.tool_calls}
-            is_silent_batch = tool_names.issubset(SILENT_TOOLS)
+        buffer = ""
+        is_tool_call_turn = False
+        printed_header = False
 
-            # inject filler phrase immediately on first tool call, unless it's a system event or silent tool batch
+        async for chunk in response_stream:
+            delta = chunk.choices[0].delta
+
+            # check for tool calls
+            if delta.tool_calls:
+                is_tool_call_turn = True
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    if idx not in collected_tool_calls:
+                        collected_tool_calls[idx] = {
+                            "id": tc.id or "",
+                            "type": "function",
+                            "function": {"name": tc.function.name or "", "arguments": tc.function.arguments or ""}
+                        }
+                    else:
+                        if tc.id:
+                            collected_tool_calls[idx]["id"] += tc.id
+                        if tc.function.name:
+                            collected_tool_calls[idx]["function"]["name"] += tc.function.name
+                        if tc.function.arguments:
+                            collected_tool_calls[idx]["function"]["arguments"] += tc.function.arguments
+
+            # check for text content
+            if delta.content:
+                if not printed_header:
+                    console.print(f"\n[bold plum2][[NAO]]:[/]")
+                    printed_header = True
+                if t_first_voice is None:
+                    t_first_voice = time.time() - start_time
+                delta_text = delta.content
+                buffer += delta_text
+                collected_content += delta_text
+                sys.stdout.write(delta_text)
+                sys.stdout.flush()
+
+                # push complete sentences to tts queue immediately for sub-second voice onset
+                open_paren = buffer.count("(") - buffer.count(")")
+                open_slash = buffer.count("\\") % 2
+                if open_paren <= 0 and open_slash == 0 and len(buffer.strip()) >= 15:
+                    match = re.search(r'([.!?]+(?:\s+|$))', buffer)
+                    if match:
+                        end_pos = match.end()
+                        sentence = buffer[:end_pos].strip()
+                        buffer = buffer[end_pos:]
+                        if sentence:
+                            queue_push(RESPONSE_FILE, sentence)
+
+        if printed_header:
+            remaining = buffer.strip()
+            if remaining:
+                queue_push(RESPONSE_FILE, remaining)
+            queue_push(RESPONSE_FILE, "[END_OF_TURN]")
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+        tool_calls_list = list(collected_tool_calls.values())
+
+        # if no tools were called, this conversation turn is complete!
+        if not is_tool_call_turn or not tool_calls_list:
+            final_text = collected_content
+            total_time = time.time() - start_time
+
+            if t_first_voice is not None:
+                console.print(
+                    f"  [bright_yellow]-> [Metrics] Total: {total_time:.2f}s | First Voice Out: {t_first_voice:.2f}s (Streamed)[/]"
+                )
+            else:
+                console.print(
+                    f"  [bright_yellow]-> [Metrics] Total: {total_time:.2f}s (No Tools)[/]"
+                )
+
+            chat_history.append({"role": "assistant", "content": final_text})
+            if text.startswith("[SYSTEM EVENT]") and "room is now empty." in text:
+                save_history([])
+            else:
+                save_history(chat_history)
+
+            safe_write(TRANSCRIPTION_FILE, "")
+            while safe_read(LISTEN_FILE) != "yes":
+                await asyncio.sleep(0.02)
+            return
+
+        # otherwise, handle multi-turn tool execution loop
+        while is_tool_call_turn and tool_calls_list and iterations < 5:
+            assistant_msg = {"role": "assistant"}
+            if collected_content:
+                assistant_msg["content"] = collected_content
+            assistant_msg["tool_calls"] = tool_calls_list
+
+            tool_names = {tc["function"]["name"] for tc in tool_calls_list}
+            is_silent_batch = tool_names.issubset(SILENT_TOOLS)
+            t_llm1 = time.time() - start_time
+
             if iterations == 0 and not text.startswith("[SYSTEM EVENT]") and not is_silent_batch:
                 filler_phrase = random.choice(FILLER_PHRASES)
                 filler = "[INTERMEDIATE] " + filler_phrase
                 safe_write(RESPONSE_FILE, filler)
-                
+
                 console.print(f"\n[bold plum2][[NAO]]:[/]")
                 wrapped_filler = textwrap.fill(filler_phrase, width=90)
                 console.print(f"{wrapped_filler}")
                 console.print(f"  [bright_yellow]-> [Metrics] First LLM Response (Filler Sent): {t_llm1:.2f}s[/]\n")
 
-            messages.append(message.model_dump(exclude_none=True))
+            messages.append(assistant_msg)
 
             t_tools_start = time.time()
 
             async def execute_tool(tool_call):
-                name = tool_call.function.name
+                name = tool_call["function"]["name"]
+                tool_id = tool_call["id"]
                 
                 if name == "take_picture":
                     console.print(f"  [dim white][[SYSTEM: Executing Tool -> take_picture (Native)]][/]")
                     
-                    # wait 0.6 seconds to ensure the camera daemon writes a fresh, post-movement frame
-                    await asyncio.sleep(0.6)
+                    # brief 0.15s buffer to grab the latest camera frame
+                    await asyncio.sleep(0.15)
                     
                     frame_path = os.path.join(STATE_DIR, "latest_frame.jpg")
                     
@@ -192,7 +335,7 @@ async def process_chat_turn(text, tools_list, tool_router):
                             b64_data = base64.b64encode(f.read()).decode("utf-8")
                         
                         return [
-                            {"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": "Camera frame captured successfully."},
+                            {"role": "tool", "tool_call_id": tool_id, "name": name, "content": "Camera frame captured successfully."},
                             {
                                 "role": "user", 
                                 "content": [
@@ -202,11 +345,11 @@ async def process_chat_turn(text, tools_list, tool_router):
                             }
                         ]
                     else:
-                        return [{"role": "tool", "tool_call_id": tool_call.id, "name": name, "content": "Error: Camera feed is offline."}]
+                        return [{"role": "tool", "tool_call_id": tool_id, "name": name, "content": "Error: Camera feed is offline."}]
 
                 console.print(f"  [dim white][[SYSTEM: Executing Tool -> {name}]][/]")
                 try:
-                    args_data = tool_call.function.arguments
+                    args_data = tool_call["function"]["arguments"]
                     if isinstance(args_data, dict):
                         arguments = args_data
                     else:
@@ -218,59 +361,62 @@ async def process_chat_turn(text, tools_list, tool_router):
                 texts = []
                 images = []
 
-                if name in tool_router:
-                    session = tool_router[name]
-                    tool_result = await session.call_tool(name, arguments=arguments)
+                try:
+                    if name in tool_router:
+                        session = tool_router[name]
+                        tool_result = await session.call_tool(name, arguments=arguments)
 
-                    if tool_result.content:
-                        for item in tool_result.content:
-                            if getattr(item, "type", "") == "text" and hasattr(
-                                item, "text"
-                            ):
-                                text_val = item.text
-                                # sometimes tools lazily return base64 as plain text
-                                if text_val.startswith("data:image"):
+                        if tool_result.content:
+                            for item in tool_result.content:
+                                if getattr(item, "type", "") == "text" and hasattr(
+                                    item, "text"
+                                ):
+                                    text_val = item.text
+                                    # sometimes tools lazily return base64 as plain text
+                                    if text_val.startswith("data:image"):
+                                        images.append(
+                                            {
+                                                "type": "image_url",
+                                                "image_url": {"url": text_val},
+                                            }
+                                        )
+                                    else:
+                                        if len(text_val) > 1500:
+                                            text_val = (
+                                                text_val[:1500]
+                                                + "\n... [CONTENT TRUNCATED FOR BREVITY]"
+                                            )
+                                        texts.append(text_val)
+                                elif getattr(item, "type", "") == "image" and hasattr(
+                                    item, "data"
+                                ):
+                                    mime_val = getattr(
+                                        item,
+                                        "mime_type",
+                                        getattr(item, "mimeType", "image/jpeg"),
+                                    )
+                                    b64_data = item.data
+                                    if isinstance(b64_data, bytes):
+                                        import base64
+
+                                        b64_data = base64.b64encode(b64_data).decode(
+                                            "utf-8"
+                                        )
                                     images.append(
                                         {
                                             "type": "image_url",
-                                            "image_url": {"url": text_val},
+                                            "image_url": {
+                                                "url": f"data:{mime_val};base64,{b64_data}",
+                                                "detail": "high",
+                                            },
                                         }
                                     )
                                 else:
-                                    if len(text_val) > 1500:
-                                        text_val = (
-                                            text_val[:1500]
-                                            + "\n... [CONTENT TRUNCATED FOR BREVITY]"
-                                        )
-                                    texts.append(text_val)
-                            elif getattr(item, "type", "") == "image" and hasattr(
-                                item, "data"
-                            ):
-                                mime_val = getattr(
-                                    item,
-                                    "mime_type",
-                                    getattr(item, "mimeType", "image/jpeg"),
-                                )
-                                b64_data = item.data
-                                if isinstance(b64_data, bytes):
-                                    import base64
-
-                                    b64_data = base64.b64encode(b64_data).decode(
-                                        "utf-8"
-                                    )
-                                images.append(
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:{mime_val};base64,{b64_data}",
-                                            "detail": "high",
-                                        },
-                                    }
-                                )
-                            else:
-                                texts.append("[Non-text resource omitted]")
-                else:
-                    texts.append(f"Error: Tool {name} not found.")
+                                    texts.append("[Non-text resource omitted]")
+                    else:
+                        texts.append(f"Error: Tool {name} not found.")
+                except Exception as e:
+                    texts.append(f"Error executing tool {name}: {str(e)}")
 
                 tool_str = "\n".join(texts) if texts else ""
                 if images and not tool_str:
@@ -282,7 +428,7 @@ async def process_chat_turn(text, tools_list, tool_router):
                 msgs.append(
                     {
                         "role": "tool",
-                        "tool_call_id": tool_call.id,
+                        "tool_call_id": tool_id,
                         "name": name,
                         "content": tool_str,
                     }
@@ -302,50 +448,66 @@ async def process_chat_turn(text, tools_list, tool_router):
                 return msgs
 
             tool_messages_lists = await asyncio.gather(
-                *(execute_tool(tc) for tc in message.tool_calls)
+                *(execute_tool(tc) for tc in tool_calls_list)
             )
+
+            # separate tool role messages from injected user media messages.
+            # the openai api strictly requires that all tool messages corresponding
+            # to tool_calls appear immediately after the assistant message before any user message.
+            pending_tool_msgs = []
+            pending_user_msgs = []
+
             for msgs in tool_messages_lists:
-                messages.extend(msgs)
+                for m in msgs:
+                    if m.get("role") == "tool":
+                        pending_tool_msgs.append(m)
+                    else:
+                        pending_user_msgs.append(m)
+
+            # append all tool responses first, then any image injections
+            messages.extend(pending_tool_msgs)
+            messages.extend(pending_user_msgs)
 
             total_tools_time += time.time() - t_tools_start
-
-            # secondary call to synthesize response or generate next tool call
             iterations += 1
-            response = await client.chat.completions.create(**completion_args)
-            message = response.choices[0].message
 
-        # we've either generated our text or hit iteration limit
-        final_text = message.content or ""
-        if iterations >= 10 and not final_text:
-            final_text = "^start(animations/Stand/Gestures/IDontKnow_1) I'm having a little trouble finding that right now."
+            # check if the model wants another tool call or is ready to synthesize speech
+            next_resp = await client.chat.completions.create(**completion_args)
+            next_msg = next_resp.choices[0].message
+            if next_msg.tool_calls:
+                tool_calls_list = [tc.model_dump() for tc in next_msg.tool_calls]
+                collected_content = next_msg.content or ""
+                is_tool_call_turn = True
+            else:
+                is_tool_call_turn = False
+                tool_calls_list = []
+
+        # stream the final post-tool synthesis so the first sentence speaks immediately!
+        final_text, t_first_voice = await stream_final_response(completion_args)
 
         total_time = time.time() - start_time
+        t_final_llm = total_time - t_llm1 - total_tools_time
 
-        console.print(f"\n[bold plum2][[NAO]]:[/]")
-        wrapped_nao = textwrap.fill(final_text, width=90)
-        console.print(f"{wrapped_nao}")
-
-        if iterations > 0:
+        if t_first_voice is not None:
             console.print(
-                f"  [bright_yellow]-> [Metrics] Total: {total_time:.2f}s (LLM Initial: {t_llm1:.2f}s | Tools: {total_tools_time:.2f}s | LLM Final: {(total_time - t_llm1 - total_tools_time):.2f}s)[/]"
+                f"  [bright_yellow]-> [Metrics] Total: {total_time:.2f}s (LLM Initial: {t_llm1:.2f}s | Tools: {total_tools_time:.2f}s | LLM Final: {t_final_llm:.2f}s | First Voice Out: {t_first_voice:.2f}s)[/]"
             )
         else:
             console.print(
-                f"  [bright_yellow]-> [Metrics] Total: {total_time:.2f}s (No Tools)[/]"
+                f"  [bright_yellow]-> [Metrics] Total: {total_time:.2f}s (LLM Initial: {t_llm1:.2f}s | Tools: {total_tools_time:.2f}s | LLM Final: {t_final_llm:.2f}s)[/]"
             )
 
         # save history
         chat_history.append({"role": "assistant", "content": final_text})
         
-        # wipe context clean after someone leaves so the next person gets a fresh interaction
-        if text.startswith("[SYSTEM EVENT]") and "just left." in text:
+        # only wipe context clean when the room is completely empty, not when one of multiple people leaves
+        if text.startswith("[SYSTEM EVENT]") and "room is now empty." in text:
             save_history([])
         else:
             save_history(chat_history)
 
         # clear transcription queue
         safe_write(TRANSCRIPTION_FILE, "")
-        safe_write(RESPONSE_FILE, final_text)
 
         while safe_read(LISTEN_FILE) != "yes":
             await asyncio.sleep(0.02)

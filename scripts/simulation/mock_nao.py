@@ -10,7 +10,7 @@ import sys
 
 # allow importing from lib (one level up)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from lib.file_utils import safe_read, safe_write
+from lib.file_utils import safe_read, safe_write, queue_pop
 
 # root project directory is 3 levels up from this file
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,30 +22,25 @@ LISTEN_FILE = os.path.join(STATE_DIR, "listen.txt")
 try:
     while True:
         try:
-            text = safe_read(RESPONSE_FILE)
+            line = queue_pop(RESPONSE_FILE)
 
-            if text:
-                # clear response file immediately so the llm can write the final response 
-                # while the robot is still "speaking" this one
-                safe_write(RESPONSE_FILE, "")
-
-                is_intermediate = text.startswith("[INTERMEDIATE] ")
-
-                if is_intermediate:
-                    text = text[len("[INTERMEDIATE] ") :]
-                    time.sleep(0.4)
-                else:
-                    # estimate reading time: ~12 chars/sec or at least 0.5s
-                    spoken_time = max(0.6, min(2.5, len(text) / 15.0))
-                    time.sleep(spoken_time)
-
-                # signal ready to listen after final response
-                if not is_intermediate:
+            if line:
+                if line == "[END_OF_TURN]":
                     time.sleep(0.15) # match physical robot's quick buffer flush
                     safe_write(LISTEN_FILE, "yes")
+                    continue
+
+                is_intermediate = line.startswith("[INTERMEDIATE] ")
+
+                if is_intermediate:
+                    time.sleep(0.35)
+                else:
+                    # estimate reading time: ~14 chars/sec
+                    spoken_time = max(0.4, min(2.0, len(line) / 14.0))
+                    time.sleep(spoken_time)
         except Exception:
             pass
 
-        time.sleep(0.03)
+        time.sleep(0.02)
 except KeyboardInterrupt:
     pass

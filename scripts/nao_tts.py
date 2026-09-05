@@ -15,7 +15,7 @@ from naoqi import ALProxy
 
 # allow importing from lib
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from lib.file_utils import safe_read, safe_write, get_env_var
+from lib.file_utils import safe_read, safe_write, queue_pop, get_env_var
 
 IP = get_env_var("NAO_IP", "10.1.65.214")
 PORT = int(get_env_var("NAO_PORT", "9559"))
@@ -45,37 +45,33 @@ def main():
     try:
         while True:
             try:
-                text = safe_read(RESPONSE_FILE)
-                if text:
-                    # clear response file immediately so the llm can write the final response 
-                    # while the robot is still physically speaking this one
-                    safe_write(RESPONSE_FILE, "")
-
-                    text = text.replace("\n", " ")
-
-                    is_intermediate = text.startswith("[INTERMEDIATE] ")
-                    if is_intermediate:
-                        text = text[len("[INTERMEDIATE] ") :]
-
-                    # strip markdown artifacts that mess up alanimatedspeech
-                    clean_text = text.replace("**", "").replace("*", "").replace("`", "")
-                    clean_text = " ".join(clean_text.split())
-
-                    text_utf8 = clean_text.encode("utf-8")
-                    animated_speech.say(text_utf8)
-
-                    if not is_intermediate:
+                line = queue_pop(RESPONSE_FILE)
+                if line:
+                    if line == "[END_OF_TURN]":
                         time.sleep(0.15) # brief buffer before enabling mic
                         safe_write(LISTEN_FILE, "yes")
+                        continue
 
-                time.sleep(0.03)
+                    is_intermediate = line.startswith("[INTERMEDIATE] ")
+                    if is_intermediate:
+                        line = line[len("[INTERMEDIATE] ") :]
+
+                    # strip markdown artifacts that mess up alanimatedspeech
+                    clean_text = line.replace("**", "").replace("*", "").replace("`", "")
+                    clean_text = " ".join(clean_text.split())
+
+                    if clean_text:
+                        text_utf8 = clean_text.encode("utf-8")
+                        animated_speech.say(text_utf8)
+
+                time.sleep(0.02)
             except Exception as e:
                 err_str = str(e)
                 if "Session closed" in err_str or "module destroyed" in err_str:
                     print("\n[[ FATAL: Connection to robot lost (WiFi dropped). Please restart main.py ]]")
                     sys.exit(1)
                 print("[[Actuation Loop Error: ", err_str, " ]]")
-                time.sleep(0.1)
+                time.sleep(0.05)
     except KeyboardInterrupt:
         pass
 

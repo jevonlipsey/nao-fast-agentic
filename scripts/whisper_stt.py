@@ -176,16 +176,49 @@ def main():
                 except Exception as e:
                     console.print(f"[bold red][[ Whisper Fallback Error: {e} ]][/]")
 
-            # minimal hallucinations filter
+            # minimal hallucinations and conversational filler filter
+            # filter out stray murmurs, confirmations, or mic breathing
             hallucinations = [
                 "...",
                 "you",
-                "now",
                 "you.",
+                "now",
                 "now.",
+                "mm-hmm",
+                "mm-hmm.",
+                "mmhmm",
+                "mmhmm.",
+                "mhm",
+                "mhm.",
+                "uh",
+                "uh.",
+                "uhh",
+                "uhh.",
+                "um",
+                "um.",
+                "umm",
+                "umm.",
+                "okay",
+                "okay.",
+                "ok",
+                "ok.",
+                "yeah",
+                "yeah.",
+                "yep",
+                "yep.",
+                "sure",
+                "sure.",
+                "so",
+                "so.",
+                "thanks for watching",
+                "thank you for watching",
+                "subtitles by",
             ]
 
-            if text and text.lower() not in hallucinations:
+            # clean punctuation and whitespace for comparison
+            normalized = text.lower().strip().strip(".!?,")
+
+            if text and normalized not in [h.strip(".!?,") for h in hallucinations] and len(normalized) > 1:
                 # pass to openai speech
                 safe_write(TRANSCRIPTION_FILE, text)
                 safe_write(LISTEN_FILE, "no")

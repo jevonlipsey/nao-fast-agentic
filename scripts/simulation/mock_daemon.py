@@ -40,7 +40,13 @@ def main():
                     pid = args.get("id")
                     name = args.get("name")
                     mock_memory[str(pid)] = name
-                    console.print(f"[dim white][[Mock ALMemory: Stored {name} under ID {pid}]][/]")
+                    console.print(f"[dim white][[mock almemory: stored {name} under id {pid}]][/]")
+                elif command == "getName":
+                    pid = args.get("id")
+                    name = mock_memory.get(str(pid))
+                    response = json.dumps({"status": "success", "name": name})
+                    conn.sendall(response.encode('utf-8'))
+                    continue
 
                 response = json.dumps({"status": "success", "message": f"Mock executed: {command}"})
                 conn.sendall(response.encode('utf-8'))

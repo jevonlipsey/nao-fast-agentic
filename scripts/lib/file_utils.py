@@ -40,6 +40,54 @@ def safe_write(filepath, content):
             time.sleep(0.05 + random.uniform(0, 0.02))
     return False
 
+
+def queue_push(filepath, line_content):
+    """
+    safely appends a line to a file queue.
+    cross-compatible with python 2.7 and python 3.x
+    """
+    try:
+        line_content = unicode(line_content)
+    except NameError:
+        pass
+
+    # ensure exactly one trailing newline
+    text = line_content.strip() + u"\n"
+
+    for _ in range(8):
+        try:
+            with io.open(filepath, "a", encoding="utf-8") as f:
+                f.write(text)
+            return True
+        except IOError:
+            time.sleep(0.02 + random.uniform(0, 0.01))
+    return False
+
+
+def queue_pop(filepath):
+    """
+    safely pops the first line from a file queue.
+    returns the popped line string or None if empty.
+    cross-compatible with python 2.7 and python 3.x
+    """
+    for _ in range(8):
+        try:
+            if not os.path.exists(filepath):
+                return None
+            with io.open(filepath, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if not lines:
+                return None
+            first_line = lines[0].strip()
+            remaining = lines[1:]
+            with io.open(filepath, "w", encoding="utf-8") as f:
+                f.writelines(remaining)
+            return first_line
+        except IOError:
+            time.sleep(0.02 + random.uniform(0, 0.01))
+    return None
+
+
 def get_env_var(key, default=None, env_path=None):
     """
     Parses a .env file natively to avoid requiring python-dotenv in Python 2.7.
