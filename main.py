@@ -7,7 +7,7 @@ from rich.console import Console
 console = Console()
 
 ### config
-USE_MOCK_NAO = False  # set false to connect to the physical robot via the nao conda env
+USE_MOCK_NAO = True  # set false to connect to the physical robot via the nao conda env
 
 SCRIPTS = [
     "whisper_stt.py",
@@ -145,7 +145,7 @@ def main():
                 p.kill()  # force kill to prevent hanging
             except Exception:
                 pass
-        
+
         # aggressively kill any orphaned conda run child processes holding ports
         try:
             os.system(r"pkill -f 'python.*nao_daemon\.py'")

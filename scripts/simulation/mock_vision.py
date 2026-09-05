@@ -1,6 +1,7 @@
 import cv2
 import time
 import os
+import sys
 from rich.console import Console
 
 console = Console()
@@ -10,12 +11,16 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 STATE_DIR = os.path.join(BASE_DIR, "state")
 FRAME_FILE = os.path.join(STATE_DIR, "latest_frame.jpg")
 
+# allow importing from lib
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from lib.file_utils import get_env_var
+
 
 def main():
     console.print("[dim white][[Starting Mock Vision (Webcam)...]][/]")
 
-    # check .env or auto-detect webcam index (try 0 then 1)
-    env_idx = os.environ.get("WEBCAM_INDEX", "")
+    # check .env for WEBCAM_INDEX or auto-detect webcam index (try 0 then 1)
+    env_idx = get_env_var("WEBCAM_INDEX", "").strip()
     if env_idx.isdigit():
         cam_indices = [int(env_idx)]
     else:

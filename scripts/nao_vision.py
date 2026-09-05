@@ -10,6 +10,7 @@ from lib.file_utils import get_env_var
 
 IP = get_env_var("NAO_IP", "10.1.65.214")
 PORT = int(get_env_var("NAO_PORT", "9559"))
+DEFAULT_CAM = int(get_env_var("NAO_CAMERA_INDEX", "0"))
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_DIR = os.path.join(BASE_DIR, "state")
@@ -25,10 +26,11 @@ def main():
         print("Details: ", e)
         return
 
-    # default to camera 0 (top), resolution 2 (vga 640x480), colorspace 11 (rgb), fps 10
-    current_cam = 0
+    # default camera from .env (0=top, 1=bottom), resolution 2 (vga 640x480), colorspace 11 (rgb), fps 10
+    current_cam = DEFAULT_CAM if DEFAULT_CAM in (0, 1) else 0
     sub_id = video_proxy.subscribeCamera("py_vision", current_cam, 2, 11, 10)
-    print("[[Camera Polling Layer Ready (Top Camera)]]")
+    cam_name = "Bottom Camera (Desk/Table)" if current_cam == 1 else "Top Camera (Eyes/Room)"
+    print("[[Camera Polling Layer Ready ({})]]".format(cam_name))
 
     try:
         while True:
